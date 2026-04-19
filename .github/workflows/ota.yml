@@ -1,0 +1,63 @@
+name: OTA Update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'index.js'
+      - 'package.json'
+      - 'assets/**'
+
+jobs:
+  ota-android:
+    name: Build & Deploy OTA Bundle
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate version tag
+        id: version
+        run: echo "VERSION=$(date +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
+
+      - name: Build Android JS bundle
+        run: |
+          mkdir -p bundle/android
+          npx react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file index.js \
+            --bundle-output bundle/android/index.android.bundle \
+            --assets-dest bundle/android/
+
+      - name: Zip bundle
+        run: |
+          cd bundle/android
+          zip -r ../../ota-android-${{ steps.version.outputs.VERSION }}.zip .
+
+      - name: Upload bundle to backend
+        env:
+          OTA_DEPLOY_URL: ${{ secrets.OTA_DEPLOY_URL }}
+          OTA_SECRET:     ${{ secrets.OTA_SECRET }}
+        run: |
+          curl -X POST "$OTA_DEPLOY_URL" \
+            -H "Authorization: Bearer $OTA_SECRET" \
+            -F "bundle=@ota-android-${{ steps.version.outputs.VERSION }}.zip" \
+            -F "version=${{ steps.version.outputs.VERSION }}" \
+            -F "platform=android"
+
+      - name: Save bundle as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ota-android-${{ steps.version.outputs.VERSION }}
+          path: ota-android-${{ steps.version.outputs.VERSION }}.zip
+          retention-days: 30

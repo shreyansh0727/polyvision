@@ -1,0 +1,9 @@
+C:\Users\shrey\Desktop\shiotvstrack\node_modules\@react-native-community\geolocation\android\build\generated\source\codegen\jni\CMakeLists.txt
+C:\Users\shrey\Desktop\shiotvstrack\node_modules\react-native-agora\android\build\generated\source\codegen\jni\CMakeLists.txt
+C:\Users\shrey\Desktop\shiotvstrack\node_modules\react-native-gesture-handler\android\build\generated\source\codegen\jni\CMakeLists.txt
+C:\Users\shrey\Desktop\shiotvstrack\node_modules\react-native-image-picker\android\build\generated\source\codegen\jni\CMakeLists.txt
+C:\Users\shrey\Desktop\shiotvstrack\node_modules\react-native-keychain\android\build\generated\source\codegen\jni\CMakeLists.txt
+C:\Users\shrey\Desktop\shiotvstrack\node_modules\react-native-safe-area-context\android\src\main\jni\CMakeLists.txt
+C:\Users\shrey\Desktop\shiotvstrack\node_modules\react-native-screens\android\src\main\jni\CMakeLists.txt
+C:\Users\shrey\Desktop\shiotvstrack\node_modules\react-native-svg\android\src\main\jni\CMakeLists.txt
+C:\Users\shrey\Desktop\shiotvstrack\node_modules\react-native\ReactAndroid\cmake-utils\default-app-setup\CMakeLists.txt
