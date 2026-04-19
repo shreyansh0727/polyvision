@@ -6,6 +6,9 @@ on:
       - 'v*'         # trigger: git tag v1.0.5 && git push --tags
   workflow_dispatch: # manual trigger from GitHub UI
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-apk:
     name: Build Signed Release APK
@@ -26,6 +29,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
 
       - name: Decode keystore
         env:
