@@ -1,3 +1,6 @@
+// ✅ This is the critical missing piece
+includeBuild("../node_modules/@react-native/gradle-plugin")
+
 buildscript {
     ext {
         buildToolsVersion = "35.0.0"
@@ -13,8 +16,6 @@ buildscript {
     }
     dependencies {
         classpath("com.android.tools.build:gradle:8.7.3")
-        // ❌ DO NOT add react-native-gradle-plugin here
-        // ✅ It comes from includeBuild in settings.gradle automatically
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.25")
         classpath("com.google.gms:google-services:4.4.1")
     }
