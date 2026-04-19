@@ -11,13 +11,19 @@ buildscript {
         google()
         mavenCentral()
     }
+    configurations.all {
+        resolutionStrategy {
+            force "com.android.tools.build:gradle:8.3.2"
+        }
+    }
     dependencies {
         classpath("com.android.tools.build:gradle:8.3.2")
         classpath("com.facebook.react:react-native-gradle-plugin")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:${kotlinVersion}")
-        classpath("com.google.gms:google-services:4.4.1")
+        classpath 'com.google.gms:google-services:4.4.1'
+    }
 }
-}
+
 allprojects {
     configurations.all {
         resolutionStrategy {
