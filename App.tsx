@@ -6,8 +6,10 @@ import { SafeAreaProvider }       from 'react-native-safe-area-context';
 import { getAuth, onAuthStateChanged } from '@react-native-firebase/auth';
 import { useAuthStore }           from './src/store/authStore';
 import Navigation                 from './src/navigation';
+import { useOtaUpdate } from './src/hooks/useOtaUpdate';
 
 export default function App() {
+  useOtaUpdate();
   const [firebaseReady, setFirebaseReady] = useState(false);
 
   useEffect(() => {
