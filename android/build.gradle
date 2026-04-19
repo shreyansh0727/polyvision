@@ -33,20 +33,17 @@ allprojects {
     }
 }
 
-// ✅ Fix: React Native native modules have no variants declared.
-// This tells Gradle to fall back to 'debug' when 'release' variant
-// is not found — fixes "No matching variant" error on Gradle 8.7+
 subprojects { subproject ->
     afterEvaluate {
         if (subproject.plugins.hasPlugin("com.android.library")) {
-            try {
-                subproject.android.buildTypes {
-                    release { matchingFallbacks = ['release', 'debug'] }
-                    debug   { matchingFallbacks = ['debug',   'release'] }
+            subproject.android.buildTypes {
+                release {
+                    matchingFallbacks = ['release', 'debug']
                 }
-            } catch (Exception ignored) {}
+            }
         }
     }
 }
+
 
 apply plugin: "com.facebook.react.rootproject"
