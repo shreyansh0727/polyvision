@@ -30,19 +30,19 @@ android {
     }
 
     signingConfigs {
-        debug {
-            storeFile file('debug.keystore')
-            storePassword 'android'
-            keyAlias 'androiddebugkey'
-            keyPassword 'android'
-        }
-        release {
-            storeFile file(MYAPP_RELEASE_STORE_FILE)
-            storePassword MYAPP_RELEASE_STORE_PASSWORD
-            keyAlias MYAPP_RELEASE_KEY_ALIAS
-            keyPassword MYAPP_RELEASE_KEY_PASSWORD
-        }
+    debug {
+        storeFile file('debug.keystore')
+        storePassword 'android'
+        keyAlias 'androiddebugkey'
+        keyPassword 'android'
     }
+    release {
+        storeFile file(System.getenv("KEYSTORE_PATH") ?: "release.keystore")
+        storePassword System.getenv("KEYSTORE_PASSWORD") ?: MYAPP_RELEASE_STORE_PASSWORD
+        keyAlias System.getenv("KEY_ALIAS") ?: MYAPP_RELEASE_KEY_ALIAS
+        keyPassword System.getenv("KEY_PASSWORD") ?: MYAPP_RELEASE_KEY_PASSWORD
+    }
+}
 
     buildTypes {
         debug {
