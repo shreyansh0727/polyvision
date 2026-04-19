@@ -29,7 +29,7 @@ jobs:
 
       - name: Verify RN gradle plugin
         run: |
-          if [ ! -f "node_modules/@react-native/gradle-plugin/build.gradle" ]; then
+          if [ ! -f "node_modules/@react-native/gradle-plugin/build.gradle.kts" ]; then
             echo "ERROR: RN gradle plugin missing!"
             exit 1
           fi
