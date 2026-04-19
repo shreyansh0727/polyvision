@@ -18,6 +18,11 @@ buildscript {
     }
 }
 
+// ✅ Add the modern plugins block here!
+plugins {
+    id("com.facebook.react.rootproject")
+}
+
 allprojects {
     configurations.all {
         resolutionStrategy {
@@ -41,5 +46,3 @@ subprojects { subproject ->
         }
     }
 }
-
-apply plugin: "com.facebook.react.rootproject"
