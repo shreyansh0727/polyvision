@@ -11,16 +11,11 @@ buildscript {
         google()
         mavenCentral()
     }
-    configurations.all {
-        resolutionStrategy {
-            force "com.android.tools.build:gradle:8.3.2"
-        }
-    }
     dependencies {
-        classpath("com.android.tools.build:gradle:8.3.2")
-        // ← NO react-native-gradle-plugin here, it comes from includeBuild
+        classpath("com.android.tools.build:gradle")
+        classpath("com.facebook.react:react-native-gradle-plugin")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:${kotlinVersion}")
-        classpath 'com.google.gms:google-services:4.4.1'
+        classpath("com.google.gms:google-services:4.4.1")
     }
 }
 
@@ -38,14 +33,12 @@ allprojects {
 subprojects { subproject ->
     afterEvaluate {
         if (subproject.plugins.hasPlugin("com.android.library")) {
-            subproject.android.buildTypes {
-                release {
-                    matchingFallbacks = ['release', 'debug']
+            try {
+                subproject.android.buildTypes {
+                    release { matchingFallbacks = ['release', 'debug'] }
+                    debug   { matchingFallbacks = ['debug', 'release'] }
                 }
-                debug {
-                    matchingFallbacks = ['debug', 'release']
-                }
-            }
+            } catch (Exception ignored) {}
         }
     }
 }

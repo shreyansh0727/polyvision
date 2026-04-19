@@ -15,7 +15,6 @@ android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
-
     namespace "com.shiotvstrack"
 
     defaultConfig {
@@ -37,7 +36,7 @@ android {
             keyPassword 'android'
         }
         release {
-            storeFile file(System.getenv("KEYSTORE_PATH") ?: "release.keystore")
+            storeFile file(System.getenv("KEYSTORE_PATH") ?: MYAPP_RELEASE_STORE_FILE)
             storePassword System.getenv("KEYSTORE_PASSWORD") ?: MYAPP_RELEASE_STORE_PASSWORD
             keyAlias System.getenv("KEY_ALIAS") ?: MYAPP_RELEASE_KEY_ALIAS
             keyPassword System.getenv("KEY_PASSWORD") ?: MYAPP_RELEASE_KEY_PASSWORD
@@ -47,13 +46,11 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
-            matchingFallbacks = ['debug', 'release']
         }
         release {
             signingConfig signingConfigs.release
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
-            matchingFallbacks = ['release', 'debug']
         }
     }
 
