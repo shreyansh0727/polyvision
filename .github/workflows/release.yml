@@ -25,8 +25,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify RN gradle plugin exists
-        run: ls node_modules/@react-native/gradle-plugin/build.gradle
+      - name: Verify RN gradle plugin
+        run: |
+          if [ ! -f "node_modules/@react-native/gradle-plugin/build.gradle" ]; then
+            echo "ERROR: RN gradle plugin missing!"
+            exit 1
+          fi
+          echo "✅ RN gradle plugin found"
 
       - uses: actions/setup-java@v4
         with:
