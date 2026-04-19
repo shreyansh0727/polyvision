@@ -10,10 +10,14 @@ react {
 def enableProguardInReleaseBuilds = false
 def jscFlavor = 'org.webkit:android-jsc:+'
 
+// Reads from CI environment (set by release.yml / ota.yml secrets)
+// Falls back to hardcoded value for local development
+def googleMapsApiKey = System.getenv("GOOGLE_MAPS_API_KEY") ?: "AIzaSyCM3tM_LeJwxBrW-w9tLgV9tg7guOWT-BM"
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
-    compileSdkVersion 35      
+    compileSdkVersion 35
     namespace "com.shiotvstrack"
 
     defaultConfig {
@@ -21,7 +25,7 @@ android {
         minSdkVersion 24
         targetSdkVersion 35
         manifestPlaceholders = [
-            GOOGLE_MAPS_API_KEY: project.env.get("GOOGLE_MAPS_API_KEY")
+            GOOGLE_MAPS_API_KEY: googleMapsApiKey
         ]
         versionCode 1
         versionName "1.0"
@@ -68,7 +72,6 @@ dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.facebook.react:react-android")
-    implementation project(':react-native-config')
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
