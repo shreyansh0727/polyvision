@@ -44,8 +44,10 @@ jobs:
           java-version: 17
 
       - name: Create .env file
-        run: echo "GOOGLE_MAPS_API_KEY=${{ secrets.GOOGLE_MAPS_API_KEY }}" > .env
-
+        run: |
+          echo "GOOGLE_MAPS_API_KEY=${{ secrets.GOOGLE_MAPS_API_KEY }}" > .env
+          echo "API_URL=${{ secrets.API_URL }}" >> .env
+          
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
