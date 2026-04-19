@@ -18,7 +18,6 @@ buildscript {
     }
 }
 
-// ✅ Add the modern plugins block here!
 plugins {
     id("com.facebook.react.rootproject")
 }
@@ -31,18 +30,5 @@ allprojects {
             force "androidx.appcompat:appcompat:1.6.1"
         }
         exclude group: 'com.android.support'
-    }
-}
-
-subprojects { subproject ->
-    afterEvaluate {
-        if (subproject.plugins.hasPlugin("com.android.library")) {
-            try {
-                subproject.android.buildTypes {
-                    release { matchingFallbacks = ['release', 'debug'] }
-                    debug   { matchingFallbacks = ['debug', 'release'] }
-                }
-            } catch (Exception ignored) {}
-        }
     }
 }
