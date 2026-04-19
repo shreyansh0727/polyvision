@@ -1,6 +1,7 @@
 // src/services/api.ts
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
-import Config                                             from 'react-native-config';
+import Config from '../Config';  // adjust relative path as needed
+
 import { getAuth, signOut }                              from '@react-native-firebase/auth';
 
 // ── Lazy logout ref ───────────────────────────────────────────────
