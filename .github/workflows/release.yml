@@ -47,7 +47,7 @@ jobs:
         run: |
           echo "GOOGLE_MAPS_API_KEY=${{ secrets.GOOGLE_MAPS_API_KEY }}" > .env
           echo "API_URL=${{ secrets.API_URL }}" >> .env
-          
+
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
@@ -80,8 +80,59 @@ jobs:
           retention-days: 30
 
       - name: Create GitHub Release with APK
+        id: gh_release
         uses: softprops/action-gh-release@v2
         with:
           files: android/app/build/outputs/apk/release/app-release.apk
           name: Release ${{ github.ref_name }}
           generate_release_notes: true
+
+      # ─────────────────────────────────────────────────────────────
+      # NEW: Update backend /ota/app/version for internal updates
+      # ─────────────────────────────────────────────────────────────
+      - name: Update backend app version metadata
+        env:
+          OTA_APP_VERSION_URL: ${{ secrets.OTA_APP_VERSION_URL }} # e.g. https://api.yourdomain.com/ota/app/version
+          OTA_SECRET:          ${{ secrets.OTA_SECRET }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"              # e.g. v1.3.0
+          VERSION="${TAG#v}"                    # strip 'v' prefix -> 1.3.0
+          APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/app-release.apk"
+
+          echo "Resolved version: ${VERSION}"
+          echo "APK URL: ${APK_URL}"
+
+          # Optional: set a min supported version (or leave null)
+          MIN_SUPPORTED_VERSION=""
+          NOTES="Internal release ${VERSION} (tag ${TAG})"
+
+          # Build JSON payload
+          TMP_PAYLOAD_FILE=app_version_payload.json
+          cat > "$TMP_PAYLOAD_FILE" << JSON
+          {
+            "latestVersion": "${VERSION}",
+            "minSupportedVersion": ${MIN_SUPPORTED_VERSION:+\"$MIN_SUPPORTED_VERSION\"},
+            "apkUrl": "${APK_URL}",
+            "notes": "${NOTES}"
+          }
+          JSON
+
+          echo "Payload:"
+          cat "$TMP_PAYLOAD_FILE"
+
+          HTTP_STATUS=$(curl -s -o /tmp/app_version_response.txt -w "%{http_code}" \
+            -X PUT "$OTA_APP_VERSION_URL" \
+            -H "Authorization: Bearer $OTA_SECRET" \
+            -H "Content-Type: application/json" \
+            --data-binary "@$TMP_PAYLOAD_FILE")
+
+          echo "Server response:"
+          cat /tmp/app_version_response.txt
+          echo "HTTP status: $HTTP_STATUS"
+
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "❌ Failed to update /ota/app/version (HTTP $HTTP_STATUS)"
+            exit 1
+          fi
+
+          echo "✅ /ota/app/version updated to v${VERSION}"
