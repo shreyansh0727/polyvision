@@ -1,33 +1,53 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
 import { useOfflineStore } from '../store/offlineStore';
-import { WifiOff, WifiHigh, RefreshCcw } from 'lucide-react-native';
+import { WifiOff, Wifi, RefreshCw } from 'lucide-react-native';
+import { MC, MF } from '../navigation/AppTheme';
 
-/**
- * Drop inside your root layout (App.tsx), above the navigator.
- * Shows a red "No internet" bar when offline, green "Back online" flash when reconnected.
- */
 export function OfflineBanner(): React.ReactElement | null {
   const isOnline = useOfflineStore(s => s.isOnline);
-  const queue = useOfflineStore(s => s.queue);
-  const slideAnim = useRef(new Animated.Value(-50)).current;
-  const wasOnline = useRef(true);
+  const queue    = useOfflineStore(s => s.queue);
+
+  const slideAnim  = useRef(new Animated.Value(-60)).current;
+  const dotOpacity = useRef(new Animated.Value(1)).current;
+  const wasOnline  = useRef(true);
+
+  // Pulsing dot loop
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(dotOpacity, { toValue: 0.3, duration: 700, useNativeDriver: true }),
+        Animated.timing(dotOpacity, { toValue: 1,   duration: 700, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [dotOpacity]);
 
   useEffect(() => {
     if (!isOnline) {
       wasOnline.current = false;
-      Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true }).start();
+      // Slide in
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        useNativeDriver: true,
+        damping: 20,
+        stiffness: 200,
+      }).start();
     } else {
       if (!wasOnline.current) {
+        // Show "back online" briefly, then slide out
         Animated.sequence([
-          Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true }),
-          Animated.delay(2000),
-          Animated.spring(slideAnim, { toValue: -50, useNativeDriver: true }),
+          Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, damping: 20, stiffness: 200 }),
+          Animated.delay(2200),
+          Animated.spring(slideAnim, { toValue: -60, useNativeDriver: true, damping: 22, stiffness: 180 }),
         ]).start();
         wasOnline.current = true;
       }
     }
   }, [isOnline, slideAnim]);
+
+  const queueCount = queue.length;
 
   return (
     <Animated.View
@@ -37,25 +57,46 @@ export function OfflineBanner(): React.ReactElement | null {
         { transform: [{ translateY: slideAnim }] },
       ]}
     >
-      {isOnline ? (
-        <View style={styles.row}>
-          <WifiHigh size={14} color="#fff" />
-          <RefreshCcw size={14} color="#fff" style={{ marginLeft: 6 }} />
-          <Text style={styles.text}>
-            Back online — syncing {queue.length} item{queue.length === 1 ? '' : 's'}
-          </Text>
-        </View>
-      ) : (
-        <View style={styles.row}>
-          <WifiOff size={14} color="#fff" />
-          <Text style={styles.text}>
-            No internet —{' '}
-            {queue.length > 0
-              ? `${queue.length} action${queue.length === 1 ? '' : 's'} queued`
-              : 'working offline'}
-          </Text>
-        </View>
-      )}
+      {/* Pulsing status dot */}
+      <Animated.View
+        style={[
+          styles.dot,
+          isOnline ? styles.dotOnline : styles.dotOffline,
+          { opacity: dotOpacity },
+        ]}
+      />
+
+      {/* Text block */}
+      <View style={styles.textBlock}>
+        <Text style={[styles.title, isOnline ? styles.titleOnline : styles.titleOffline]}>
+          {isOnline ? 'Back online' : 'No internet connection'}
+        </Text>
+        <Text style={[styles.sub, isOnline ? styles.subOnline : styles.subOffline]}>
+          {isOnline
+            ? queueCount > 0
+              ? `Syncing ${queueCount} queued action${queueCount === 1 ? '' : 's'}…`
+              : 'All changes synced'
+            : queueCount > 0
+              ? `${queueCount} action${queueCount === 1 ? '' : 's'} queued`
+              : 'Working offline'}
+        </Text>
+      </View>
+
+      {/* Icon + badge pill */}
+      <View style={[styles.pill, isOnline ? styles.pillOnline : styles.pillOffline]}>
+        {isOnline ? (
+          queueCount > 0
+            ? <RefreshCw size={11} color={isOnline ? '#4ade80' : '#f87171'} style={styles.pillIcon} />
+            : <Wifi size={11} color="#4ade80" style={styles.pillIcon} />
+        ) : (
+          <WifiOff size={11} color="#f87171" style={styles.pillIcon} />
+        )}
+        <Text style={[styles.pillText, isOnline ? styles.pillTextOnline : styles.pillTextOffline]}>
+          {isOnline
+            ? queueCount > 0 ? `${queueCount} queued` : 'Live'
+            : 'Offline'}
+        </Text>
+      </View>
     </Animated.View>
   );
 }
@@ -67,16 +108,73 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 9999,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    alignItems: 'center',
-  },
-  row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    gap: 10,
   },
-  offline: { backgroundColor: '#c0392b' },
-  online: { backgroundColor: '#27ae60' },
-  text: { color: '#fff', fontWeight: '600', fontSize: 13, marginLeft: 6 },
+
+  // ── State backgrounds ───────────────────────────────────
+  offline: {
+    backgroundColor: '#7f1d1d',
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#991b1b',
+  },
+  online: {
+    backgroundColor: '#14532d',
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#166534',
+  },
+
+  // ── Pulsing dot ─────────────────────────────────────────
+  dot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+    flexShrink: 0,
+  },
+  dotOffline: { backgroundColor: '#f87171' },
+  dotOnline:  { backgroundColor: '#4ade80' },
+
+  // ── Text block ──────────────────────────────────────────
+  textBlock: { flex: 1 },
+  title: {
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: MF.mono,
+    letterSpacing: 0.4,
+  },
+  titleOffline: { color: '#fca5a5' },
+  titleOnline:  { color: '#86efac' },
+  sub: {
+    fontSize: 10,
+    fontFamily: MF.mono,
+    marginTop: 2,
+    opacity: 0.75,
+  },
+  subOffline: { color: '#fca5a5' },
+  subOnline:  { color: '#86efac' },
+
+  // ── Badge pill ──────────────────────────────────────────
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    gap: 5,
+    flexShrink: 0,
+  },
+  pillOffline: { backgroundColor: '#450a0a' },
+  pillOnline:  { backgroundColor: '#052e16' },
+  pillIcon: {},
+  pillText: {
+    fontSize: 9,
+    fontWeight: '800',
+    fontFamily: MF.mono,
+    letterSpacing: 0.7,
+  },
+  pillTextOffline: { color: '#fca5a5' },
+  pillTextOnline:  { color: '#86efac' },
 });
