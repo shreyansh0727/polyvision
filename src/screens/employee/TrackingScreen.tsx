@@ -281,7 +281,7 @@ export default function TrackingScreen() {
         <SectionCard>
           {/* Status row */}
           <View style={s.statusRow}>
-            <View style={[s.statusDot, { backgroundColor: isTracking ? MC.green : MC.textFaint }]} />
+            <View style={[s.statusDot, { backgroundColor: isTracking ? MC.rose : MC.textFaint }]} />
             <Text style={[s.statusLabel, { color: isTracking ? MC.green : MC.textSub }]}>
               {isBusy
                 ? isStarting ? 'Starting…' : 'Stopping…'
