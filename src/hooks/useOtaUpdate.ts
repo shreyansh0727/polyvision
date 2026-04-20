@@ -16,7 +16,7 @@
 import { useEffect, useRef } from 'react';
 import { AppState, AppStateStatus, Platform } from 'react-native';
 import RNFS from 'react-native-fs';
-import Config from '../config';
+import Config from '../Config';
 
 const PLATFORM    = Platform.OS;                     // "android"
 const BUNDLE_DIR  = RNFS.DocumentDirectoryPath + '/ota';
