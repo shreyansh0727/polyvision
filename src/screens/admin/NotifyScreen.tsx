@@ -25,7 +25,7 @@ import {
   Type, Info, Loader,
 } from 'lucide-react-native';
 import { apiGet, apiPost }  from '../../services/api';
-
+import { SafeAreaView } from 'react-native-safe-area-context';
 // ─────────────────────────────────────────────────────────────────
 // Design Tokens
 // ─────────────────────────────────────────────────────────────────
@@ -632,11 +632,12 @@ export default function NotifyScreen() {
   const sendAccent  = selected ? avatarColor(selected.name) : C.green;
 
   return (
-    <KeyboardAvoidingView
-      style={s.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView
+    <SafeAreaView style={s.container} edges={['top', 'left', 'right']}>
+      <KeyboardAvoidingView
+        style={s.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <ScrollView
         contentContainerStyle={s.scroll}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
@@ -794,6 +795,7 @@ export default function NotifyScreen() {
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 

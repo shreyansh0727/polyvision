@@ -15,7 +15,7 @@ import {
   CheckCircle2, User, CalendarDays, Hash,
 } from 'lucide-react-native';
 import { apiGet, apiDelete } from '../../services/api';
-
+import { SafeAreaView } from 'react-native-safe-area-context';
 // ── Design Tokens ─────────────────────────────────────────────────
 const C = {
   bg:           '#080C14',
@@ -637,21 +637,23 @@ export default function AdminVisitsScreen() {
 
   if (loading) {
     return (
-      <View style={gs.container}>
+      <SafeAreaView style={gs.container} edges={['top', 'left', 'right']} >
         <VisitsHeader count={0} />
         <View style={gs.list}>
           {[...Array(6)].map((_, i) => <SkeletonCard key={`skeleton-${i}`} />)}
         </View>
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={gs.container}>
-      <FlatList
-        data={visits}
-        keyExtractor={keyExtractor}
-        renderItem={renderItem}
+    
+      
+      <SafeAreaView style={gs.container} edges={['top', 'left', 'right']} >
+        <FlatList
+          data={visits}
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
         ListHeaderComponent={<VisitsHeader count={visits.length} />}
         contentContainerStyle={visits.length === 0 ? gs.emptyList : gs.list}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
@@ -667,7 +669,7 @@ export default function AdminVisitsScreen() {
         showsVerticalScrollIndicator={false}
         extraData={expandedId}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 

@@ -1,42 +1,44 @@
 // src/services/api.ts
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
-import Config from '../Config';  // adjust relative path as needed
-
-import { getAuth, signOut }                              from '@react-native-firebase/auth';
+import Config from '../Config';
+import { getAuth, signOut } from '@react-native-firebase/auth';
+import { useOfflineStore } from '../store/offlineStore';
 
 // ── Lazy logout ref ───────────────────────────────────────────────
 type LogoutFn = () => void;
 let _logoutHandler: LogoutFn | null = null;
-export const setLogoutHandler = (fn: LogoutFn) => { _logoutHandler = fn; };
+export const setLogoutHandler = (fn: LogoutFn) => {
+  _logoutHandler = fn;
+};
 
 // ── Token cache ───────────────────────────────────────────────────
-let _cachedToken:    string | null = null;
-let _tokenExpiresAt: number        = 0;
-const TOKEN_REFRESH_BUFFER_MS      = 60_000;
+let _cachedToken: string | null = null;
+let _tokenExpiresAt = 0;
+const TOKEN_REFRESH_BUFFER_MS = 60_000;
 
 async function getFreshToken(forceRefresh = false): Promise<string | null> {
   const user = getAuth().currentUser;
   if (!user) return null;
 
-  const now          = Date.now();
+  const now = Date.now();
   const needsRefresh = forceRefresh || !_cachedToken || now >= _tokenExpiresAt;
   if (!needsRefresh) return _cachedToken;
 
   try {
-    const token     = await user.getIdToken(forceRefresh);
-    _cachedToken    = token;
+    const token = await user.getIdToken(forceRefresh);
+    _cachedToken = token;
     _tokenExpiresAt = now + 3_540_000 - TOKEN_REFRESH_BUFFER_MS;
     return token;
   } catch (e) {
     console.warn('[API] Token fetch failed:', e);
-    _cachedToken    = null;
+    _cachedToken = null;
     _tokenExpiresAt = 0;
     return null;
   }
 }
 
 export function clearTokenCache() {
-  _cachedToken    = null;
+  _cachedToken = null;
   _tokenExpiresAt = 0;
 }
 
@@ -46,7 +48,7 @@ const api = axios.create({
   timeout: 12_000,
   headers: {
     'Content-Type': 'application/json',
-    Accept:         'application/json',
+    Accept: 'application/json',
   },
 });
 
@@ -62,10 +64,10 @@ api.interceptors.request.use(
     }
     return config;
   },
-  (error) => Promise.reject(error),
+  error => Promise.reject(error),
 );
 
-// ── Response interceptor — 401 refresh + logout ───────────────────
+// ── Response interceptor — 401 refresh + logout + offline guard ──
 let _isRefreshing = false;
 let _refreshSubscribers: Array<(token: string) => void> = [];
 
@@ -74,28 +76,34 @@ function subscribeRefresh(cb: (token: string) => void) {
 }
 
 function notifyRefreshSubscribers(token: string) {
-  _refreshSubscribers.forEach((cb) => cb(token));
+  _refreshSubscribers.forEach(cb => cb(token));
   _refreshSubscribers = [];
 }
 
 api.interceptors.response.use(
-  (res) => res,
+  res => res,
   async (err: AxiosError<{ detail?: string }>) => {
-    const status  = err.response?.status;
-    const url     = err.config?.url;
+    const status = err.response?.status;
+    const url = err.config?.url;
     const origReq = err.config as InternalAxiosRequestConfig & { _retried?: boolean };
+
+    if (!err.response && err.code !== 'ECONNABORTED') {
+      useOfflineStore.getState().setOnline(false);
+    }
 
     if (status === 401 && !origReq._retried) {
       origReq._retried = true;
 
       if (_isRefreshing) {
         return new Promise((resolve, reject) => {
-          subscribeRefresh(async (newToken) => {
+          subscribeRefresh(async newToken => {
             try {
               origReq.headers = origReq.headers ?? {};
               origReq.headers.Authorization = `Bearer ${newToken}`;
               resolve(await api(origReq));
-            } catch (e) { reject(e); }
+            } catch (e) {
+              reject(e);
+            }
           });
         });
       }
@@ -117,7 +125,9 @@ api.interceptors.response.use(
       _isRefreshing = false;
       console.warn(`[API] 401 after token refresh — logging out (${url})`);
       clearTokenCache();
-      try { await signOut(getAuth()); } catch (_) {}
+      try {
+        await signOut(getAuth());
+      } catch (_) {}
       _logoutHandler?.();
       return Promise.reject(new Error('Session expired. Please log in again.'));
     }

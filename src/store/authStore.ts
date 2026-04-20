@@ -1,5 +1,7 @@
 // src/store/authStore.ts
 import { create } from 'zustand';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo from '@react-native-community/netinfo';
 import {
   getAuth,
   onAuthStateChanged,
@@ -22,6 +24,8 @@ interface AuthStore {
   clearError:      () => void;
 }
 
+const STORAGE_KEY = 'auth.employee.v1';
+
 function resetState() {
   return {
     employee:        null as Employee | null,
@@ -29,6 +33,29 @@ function resetState() {
     loading:         false,
     error:           null as string | null,
   };
+}
+
+async function persistEmployee(employee: Employee | null) {
+  try {
+    if (employee) {
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(employee));
+    } else {
+      await AsyncStorage.removeItem(STORAGE_KEY);
+    }
+  } catch (e) {
+    console.warn('[Auth] Failed to persist employee:', e);
+  }
+}
+
+async function readStoredEmployee(): Promise<Employee | null> {
+  try {
+    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as Employee;
+  } catch (e) {
+    console.warn('[Auth] Failed to read stored employee:', e);
+    return null;
+  }
 }
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
@@ -40,6 +67,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     setLogoutHandler(async () => {
       clearTokenCache();
       set(resetState());
+      await persistEmployee(null);
       try { await signOut(getAuth()); } catch (_) {}
     });
 
@@ -47,6 +75,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       if (!firebaseUser && get().isAuthenticated) {
         clearTokenCache();
         set(resetState());
+        persistEmployee(null);
       }
     });
   },
@@ -55,19 +84,50 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     set({ loading: true });
     try {
       const firebaseUser = getAuth().currentUser;
-      if (!firebaseUser) { set(resetState()); return; }
-
-      const employee = await apiGet('/auth/me') as Employee
-
-      const currentUser = getAuth().currentUser;
-      if (!currentUser || currentUser.uid !== firebaseUser.uid) {
-        set(resetState()); return;
+      if (!firebaseUser) {
+        // No Firebase user; maybe we only have cached employee (for UI hints)
+        const cached = await readStoredEmployee();
+        if (cached) {
+          set({ employee: cached, isAuthenticated: false });
+        } else {
+          set(resetState());
+        }
+        return;
       }
-      set({ employee, isAuthenticated: true });
-    } catch (_) {
-      clearTokenCache();
-      set(resetState());
-      try { await signOut(getAuth()); } catch (_) {}
+
+      try {
+        const employee = await apiGet('/auth/me') as Employee;
+
+        const currentUser = getAuth().currentUser;
+        if (!currentUser || currentUser.uid !== firebaseUser.uid) {
+          set(resetState());
+          await persistEmployee(null);
+          return;
+        }
+
+        set({ employee, isAuthenticated: true });
+        await persistEmployee(employee);
+      } catch (e: any) {
+        const netState = await NetInfo.fetch();
+        const offline = netState.isConnected === false || netState.isInternetReachable === false;
+
+        if (offline) {
+          // Offline: fall back to cached employee if any
+          const cached = await readStoredEmployee();
+          if (cached) {
+            set({ employee: cached, isAuthenticated: true });
+            return;
+          }
+          set(resetState());
+          return;
+        }
+
+        // Online but /auth/me failed → real auth error; clear everything
+        clearTokenCache();
+        set(resetState());
+        await persistEmployee(null);
+        try { await signOut(getAuth()); } catch (_) {}
+      }
     } finally {
       set({ loading: false });
     }
@@ -80,26 +140,25 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       await signInWithEmailAndPassword(getAuth(), email, password);
       const employee = await apiGet('/auth/me') as Employee;
       set({ employee, isAuthenticated: true, error: null });
+      await persistEmployee(employee);
     } catch (e: any) {
       const message = mapFirebaseError(e?.code) ?? e?.message ?? 'Login failed';
       clearTokenCache();
       set({ ...resetState(), error: message });
+      await persistEmployee(null);
       throw new Error(message);
     } finally {
       set({ loading: false });
     }
   },
 
-  // ── Change password ─────────────────────────────────────────────
-  // Backend revokes all refresh tokens after update, so we force
-  // a full logout — the employee must re-authenticate.
   changePassword: async (newPassword: string) => {
     set({ loading: true, error: null });
     try {
       await apiPost('/auth/change-password', { new_password: newPassword });
-      // Force logout — existing token is now invalid
       clearTokenCache();
       set(resetState());
+      await persistEmployee(null);
       try { await signOut(getAuth()); } catch (_) {}
     } catch (e: any) {
       const message = e?.message ?? 'Failed to change password';
@@ -113,6 +172,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   logout: async () => {
     clearTokenCache();
     set(resetState());
+    await persistEmployee(null);
     try {
       await apiPost('/auth/logout').catch(() => {});
       await signOut(getAuth());

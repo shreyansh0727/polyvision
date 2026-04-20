@@ -6,20 +6,19 @@ import {
   AppStateStatus, Animated, TouchableOpacity,
   Switch, StatusBar,
 } from 'react-native';
-import Svg, { Circle, Line, Path } from 'react-native-svg';
 import DeviceInfo        from 'react-native-device-info';
 import { useTracking }   from '../../hooks/useTracking';
 import { useAuthStore }  from '../../store/authStore';
+import { useOfflineStore } from '../../store/offlineStore';
 import { getIsTracking } from '../../services/locationService';
 import { MC, MF, avatarColor } from '../../navigation/AppTheme';
 
-// ── Lucide icons (react-native compatible) ────────────────────────
 import {
   MapPin, Radio, BatteryMedium, BatteryLow, BatteryFull,
   BatteryCharging, Navigation, Clock, AlertCircle,
-  LogOut, RefreshCw, WifiOff, User, Zap,
+  LogOut, RefreshCw, WifiOff, User, Zap, CloudOff, RefreshCcw,
 } from 'lucide-react-native';
-
+import { SafeAreaView } from 'react-native-safe-area-context';
 // ─────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────
@@ -35,7 +34,7 @@ function formatCoord(n: number, dir: [string, string]): string {
   const abs = Math.abs(n);
   const d   = Math.floor(abs);
   const min = ((abs - d) * 60).toFixed(3);
-  return `${d}° ${min}' ${n >= 0 ? dir[0] : dir[1]}`;
+  return `${d}° ${min}\' ${n >= 0 ? dir[0] : dir[1]}`;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -55,7 +54,7 @@ function TrackingGlow({ active }: { active: boolean }) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// PulseRing — animated ring for the radar-style toggle button
+// PulseRing
 // ─────────────────────────────────────────────────────────────────
 function PulseRing({ active }: { active: boolean }) {
   const anim = useRef(new Animated.Value(0)).current;
@@ -113,8 +112,13 @@ export default function TrackingScreen() {
     error, lastLocation, start, stop, clearError,
   } = useTracking();
 
-  const employee = useAuthStore((s) => s.employee);
-  const logout   = useAuthStore((s) => s.logout);
+  const employee   = useAuthStore((s) => s.employee);
+  const logout     = useAuthStore((s) => s.logout);
+
+  // ── Offline state ──────────────────────────────────────────────
+  const isOnline   = useOfflineStore((s) => s.isOnline);
+  const queue      = useOfflineStore((s) => s.queue);
+  const isSyncing  = useOfflineStore((s) => s.isSyncing);
 
   const [shiftStart,   setShiftStart]   = useState<number | null>(null);
   const [shiftSeconds, setShiftSeconds] = useState(0);
@@ -220,7 +224,7 @@ export default function TrackingScreen() {
   // ─────────────────────────────────────────────────────────────
   return (
     <View style={s.root}>
-      <StatusBar barStyle="light-content" backgroundColor={MC.bg} />
+      <SafeAreaView style={s.root} edges={['top', 'left', 'right']}>
       <TrackingGlow active={isTracking} />
 
       <ScrollView
@@ -258,6 +262,29 @@ export default function TrackingScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* ── Offline banner ── */}
+        {!isOnline && (
+          <SectionCard style={s.offlineCard}>
+            <CloudOff size={14} color={MC.rose} style={{ marginRight: 8 }} />
+            <View style={{ flex: 1 }}>
+              <Text style={s.offlineTitle}>You\'re offline</Text>
+              {queue.length > 0 && (
+                <Text style={s.offlineSub}>
+                  {queue.length} location ping{queue.length > 1 ? 's' : ''} queued — will sync when reconnected
+                </Text>
+              )}
+            </View>
+          </SectionCard>
+        )}
+
+        {/* ── Syncing banner ── */}
+        {isOnline && isSyncing && (
+          <SectionCard style={s.syncCard}>
+            <RefreshCcw size={14} color={MC.blue} style={{ marginRight: 8 }} />
+            <Text style={s.syncText}>Syncing {queue.length} queued item{queue.length > 1 ? 's' : ''}…</Text>
+          </SectionCard>
+        )}
+
         {/* ── Background warning ── */}
         {isTracking && bgWarning && (
           <SectionCard style={s.warnCard}>
@@ -279,7 +306,6 @@ export default function TrackingScreen() {
 
         {/* ── Main tracking toggle card ── */}
         <SectionCard>
-          {/* Status row */}
           <View style={s.statusRow}>
             <View style={[s.statusDot, { backgroundColor: isTracking ? MC.rose : MC.textFaint }]} />
             <Text style={[s.statusLabel, { color: isTracking ? MC.green : MC.textSub }]}>
@@ -287,9 +313,14 @@ export default function TrackingScreen() {
                 ? isStarting ? 'Starting…' : 'Stopping…'
                 : isTracking ? 'Tracking Active' : 'Tracking Inactive'}
             </Text>
+            {/* Offline pill next to status */}
+            {!isOnline && (
+              <View style={s.offlinePill}>
+                <Text style={s.offlinePillText}>OFFLINE</Text>
+              </View>
+            )}
           </View>
 
-          {/* Radar toggle button */}
           <View style={s.radarWrap}>
             <PulseRing active={isTracking} />
             <TouchableOpacity
@@ -305,8 +336,8 @@ export default function TrackingScreen() {
               activeOpacity={0.75}
             >
               {isTracking
-                ? <Radio    size={32} color={MC.green} />
-                : <MapPin   size={32} color={MC.textSub} />}
+                ? <Radio  size={32} color={MC.green} />
+                : <MapPin size={32} color={MC.textSub} />}
             </TouchableOpacity>
           </View>
 
@@ -314,11 +345,10 @@ export default function TrackingScreen() {
             {isBusy
               ? isStarting ? 'Requesting permissions…' : 'Stopping service…'
               : isTracking
-              ? 'Tap to stop tracking'
+              ? !isOnline ? 'Tracking active (offline — pings queued)' : 'Tap to stop tracking'
               : 'Tap to start tracking'}
           </Text>
 
-          {/* iOS / Android switch alternative */}
           <View style={s.switchRow}>
             <Text style={s.switchLabel}>Location Tracking</Text>
             <Switch
@@ -359,7 +389,7 @@ export default function TrackingScreen() {
               <View style={s.coordBox}>
                 <Text style={s.coordLabel}>LAT</Text>
                 <Text style={s.coordValue}>
-                  {formatCoord(lastLocation.lat,  ['N', 'S'])}
+                  {formatCoord(lastLocation.lat, ['N', 'S'])}
                 </Text>
               </View>
               <View style={[s.coordBox, s.coordBoxRight]}>
@@ -379,7 +409,6 @@ export default function TrackingScreen() {
 
         {/* ── Stats row ── */}
         <View style={s.statsRow}>
-          {/* Battery */}
           <View style={s.statCard}>
             <BatteryIcon level={battery} size={18} />
             <Text style={s.statValue}>
@@ -388,7 +417,6 @@ export default function TrackingScreen() {
             <Text style={s.statLabel}>Battery</Text>
           </View>
 
-          {/* Role */}
           <View style={s.statCard}>
             <Zap size={18} color={MC.gold} />
             <Text style={s.statValue} numberOfLines={1}>
@@ -397,11 +425,15 @@ export default function TrackingScreen() {
             <Text style={s.statLabel}>Role</Text>
           </View>
 
-          {/* Status */}
           <View style={s.statCard}>
-            <View style={[s.statusDot, { backgroundColor: isTracking ? MC.green : MC.textFaint, alignSelf: 'center' }]} />
-            <Text style={[s.statValue, { color: isTracking ? MC.green : MC.textFaint }]}>
-              {isTracking ? 'Live' : 'Off'}
+            <View style={[s.statusDot, {
+              backgroundColor: !isOnline ? MC.rose : isTracking ? MC.green : MC.textFaint,
+              alignSelf: 'center',
+            }]} />
+            <Text style={[s.statValue, {
+              color: !isOnline ? MC.rose : isTracking ? MC.green : MC.textFaint,
+            }]}>
+              {!isOnline ? 'Offline' : isTracking ? 'Live' : 'Off'}
             </Text>
             <Text style={s.statLabel}>Status</Text>
           </View>
@@ -409,6 +441,7 @@ export default function TrackingScreen() {
 
         <View style={{ height: 8 }} />
       </ScrollView>
+      </SafeAreaView>
     </View>
   );
 }
@@ -417,8 +450,8 @@ export default function TrackingScreen() {
 // Styles
 // ─────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  root:  { flex: 1, backgroundColor: MC.bg },
-  scroll: { flex: 1 },
+  root:      { flex: 1, backgroundColor: MC.bg },
+  scroll:    { flex: 1 },
   container: { padding: 20, paddingBottom: 52 },
 
   glow: {
@@ -429,44 +462,30 @@ const s = StyleSheet.create({
   },
 
   // ── Header ──────────────────────────────────────────────────────
-  header: {
-    flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'space-between', marginBottom: 20,
-  },
-  headerLeft:    { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  avatar: {
-    width: 44, height: 44, borderRadius: 22,
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1.5,
-  },
-  avatarText:    { fontSize: 18, fontWeight: '800', fontFamily: MF.display },
-  headerName:    { fontSize: 15, fontWeight: '700', color: MC.textPrimary, fontFamily: MF.display },
+  header:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
+  headerLeft:   { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  avatar:       { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5 },
+  avatarText:   { fontSize: 18, fontWeight: '800', fontFamily: MF.display },
+  headerName:   { fontSize: 15, fontWeight: '700', color: MC.textPrimary, fontFamily: MF.display },
   headerRolePill: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
-  headerRole:    { fontSize: 10, color: MC.textFaint, fontFamily: MF.mono, textTransform: 'capitalize' },
-  logoutBtn:     { flexDirection: 'row', alignItems: 'center', gap: 5, padding: 8, borderRadius: 8, backgroundColor: MC.surfaceAlt },
-  logoutText:    { fontSize: 11, color: MC.rose, fontFamily: MF.mono },
+  headerRole:   { fontSize: 10, color: MC.textFaint, fontFamily: MF.mono, textTransform: 'capitalize' },
+  logoutBtn:    { flexDirection: 'row', alignItems: 'center', gap: 5, padding: 8, borderRadius: 8, backgroundColor: MC.surfaceAlt },
+  logoutText:   { fontSize: 11, color: MC.rose, fontFamily: MF.mono },
+
+  // ── Offline / Sync banners ────────────────────────────────────────
+  offlineCard:  { flexDirection: 'row', alignItems: 'center', backgroundColor: `${MC.rose}18`, borderColor: `${MC.rose}44`, paddingVertical: 12 },
+  offlineTitle: { fontSize: 12, color: MC.rose, fontFamily: MF.mono, fontWeight: '700' },
+  offlineSub:   { fontSize: 10, color: MC.rose, fontFamily: MF.mono, marginTop: 2, opacity: 0.8 },
+  syncCard:     { flexDirection: 'row', alignItems: 'center', backgroundColor: `${MC.blue}18`, borderColor: `${MC.blue}44`, paddingVertical: 12 },
+  syncText:     { fontSize: 12, color: MC.blue, fontFamily: MF.mono },
+  offlinePill:  { marginLeft: 'auto', backgroundColor: `${MC.rose}22`, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  offlinePillText: { fontSize: 9, color: MC.rose, fontFamily: MF.mono, fontWeight: '700', letterSpacing: 0.6 },
 
   // ── Cards ────────────────────────────────────────────────────────
-  card: {
-    backgroundColor: MC.surface,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: MC.border,
-    padding: 18,
-    marginBottom: 14,
-  },
-  warnCard: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: MC.goldDim, borderColor: `${MC.gold}44`,
-    paddingVertical: 12,
-  },
-  warnText:  { flex: 1, fontSize: 11, color: MC.gold, fontFamily: MF.mono, lineHeight: 16 },
-  errorCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: MC.roseDim, borderRadius: 12,
-    borderWidth: 1, borderColor: `${MC.rose}44`,
-    padding: 12, marginBottom: 14,
-  },
+  card:         { backgroundColor: MC.surface, borderRadius: 16, borderWidth: 1, borderColor: MC.border, padding: 18, marginBottom: 14 },
+  warnCard:     { flexDirection: 'row', alignItems: 'center', backgroundColor: MC.goldDim, borderColor: `${MC.gold}44`, paddingVertical: 12 },
+  warnText:     { flex: 1, fontSize: 11, color: MC.gold, fontFamily: MF.mono, lineHeight: 16 },
+  errorCard:    { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: MC.roseDim, borderRadius: 12, borderWidth: 1, borderColor: `${MC.rose}44`, padding: 12, marginBottom: 14 },
   errorText:    { flex: 1, fontSize: 12, color: MC.rose, fontFamily: MF.mono },
   errorDismiss: { fontSize: 13, color: MC.rose },
 
@@ -474,20 +493,11 @@ const s = StyleSheet.create({
   statusRow:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 24 },
   statusDot:   { width: 8, height: 8, borderRadius: 4 },
   statusLabel: { fontSize: 12, fontFamily: MF.mono, fontWeight: '600', letterSpacing: 0.4 },
-
-  radarWrap: { alignItems: 'center', justifyContent: 'center', marginBottom: 20, height: 90 },
-  pulseRing: {
-    position: 'absolute',
-    width: 80, height: 80, borderRadius: 40,
-    borderWidth: 1.5, borderColor: MC.green,
-  },
-  radarBtn: {
-    width: 80, height: 80, borderRadius: 40,
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1.5,
-  },
-  radarHint:  { textAlign: 'center', fontSize: 11, color: MC.textFaint, fontFamily: MF.mono, marginBottom: 18 },
-  switchRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 4 },
+  radarWrap:   { alignItems: 'center', justifyContent: 'center', marginBottom: 20, height: 90 },
+  pulseRing:   { position: 'absolute', width: 80, height: 80, borderRadius: 40, borderWidth: 1.5, borderColor: MC.green },
+  radarBtn:    { width: 80, height: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5 },
+  radarHint:   { textAlign: 'center', fontSize: 11, color: MC.textFaint, fontFamily: MF.mono, marginBottom: 18 },
+  switchRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 4 },
   switchLabel: { fontSize: 13, color: MC.textSub, fontFamily: MF.mono },
 
   // ── Shift timer ──────────────────────────────────────────────────
@@ -497,22 +507,18 @@ const s = StyleSheet.create({
   shiftSub:    { fontSize: 11, color: MC.textFaint, fontFamily: MF.mono, marginTop: 4 },
 
   // ── Location ─────────────────────────────────────────────────────
-  locHeader:  { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
-  locTitle:   { fontSize: 11, color: MC.textSub, fontFamily: MF.mono, textTransform: 'uppercase', letterSpacing: 0.6 },
-  coordRow:   { flexDirection: 'row', gap: 10 },
-  coordBox:   { flex: 1, backgroundColor: MC.surfaceAlt, borderRadius: 10, padding: 12 },
+  locHeader:     { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
+  locTitle:      { fontSize: 11, color: MC.textSub, fontFamily: MF.mono, textTransform: 'uppercase', letterSpacing: 0.6 },
+  coordRow:      { flexDirection: 'row', gap: 10 },
+  coordBox:      { flex: 1, backgroundColor: MC.surfaceAlt, borderRadius: 10, padding: 12 },
   coordBoxRight: {},
-  coordLabel: { fontSize: 9, color: MC.textFaint, fontFamily: MF.mono, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 4 },
-  coordValue: { fontSize: 12, color: MC.textPrimary, fontFamily: MF.mono },
-  accuracy:   { fontSize: 10, color: MC.textFaint, fontFamily: MF.mono, marginTop: 8, textAlign: 'center' },
+  coordLabel:    { fontSize: 9, color: MC.textFaint, fontFamily: MF.mono, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 4 },
+  coordValue:    { fontSize: 12, color: MC.textPrimary, fontFamily: MF.mono },
+  accuracy:      { fontSize: 10, color: MC.textFaint, fontFamily: MF.mono, marginTop: 8, textAlign: 'center' },
 
   // ── Stats ─────────────────────────────────────────────────────────
   statsRow: { flexDirection: 'row', gap: 10, marginBottom: 4 },
-  statCard: {
-    flex: 1, backgroundColor: MC.surface,
-    borderRadius: 14, borderWidth: 1, borderColor: MC.border,
-    padding: 14, alignItems: 'center', gap: 6,
-  },
+  statCard: { flex: 1, backgroundColor: MC.surface, borderRadius: 14, borderWidth: 1, borderColor: MC.border, padding: 14, alignItems: 'center', gap: 6 },
   statValue: { fontSize: 14, fontWeight: '700', color: MC.textPrimary, fontFamily: MF.display, textTransform: 'capitalize' },
   statLabel: { fontSize: 9, color: MC.textFaint, fontFamily: MF.mono, textTransform: 'uppercase', letterSpacing: 0.8 },
 });

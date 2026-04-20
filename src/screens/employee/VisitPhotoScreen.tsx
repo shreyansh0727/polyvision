@@ -5,23 +5,24 @@ import {
   RefreshControl, Text, View, ActivityIndicator, TouchableOpacity,
   Animated, TextInput,
 } from 'react-native';
-import Svg, { Path, Circle, G }                          from 'react-native-svg';
-import { captureAndUploadVisitPhoto, VisitRecord }       from '../../services/photoService';
-import { apiGet }                                        from '../../services/api';
-import { useAuthStore }                                  from '../../store/authStore';
-import { VisitPhoto }                                    from '../../types';
-import { MC, MF }                                        from '../../navigation/AppTheme';
+import Svg, { Path, Circle } from 'react-native-svg';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { captureAndUploadVisitPhoto, VisitRecord } from '../../services/photoService';
+import { offlineGet } from '../../services/useOfflineApi';
+import { useAuthStore } from '../../store/authStore';
+import { useOfflineStore } from '../../store/offlineStore';
+import { VisitPhoto } from '../../types';
+import { MC, MF } from '../../navigation/AppTheme';
 import {
-  Camera, MapPin, Clock, ChevronRight, Image as ImageIcon,
-  FileText, RefreshCw, Inbox, Upload, CheckCircle2,
-  AlertCircle, History, Hash,
+  Camera, Image as ImageIcon, FileText, Inbox, Upload,
+  CheckCircle2, AlertCircle, History, Hash, WifiOff, CloudOff,
+  Clock,
 } from 'lucide-react-native';
 
 // ─────────────────────────────────────────────────────────────────
-// Inline sub-components (replaces external component imports)
+// Inline sub-components
 // ─────────────────────────────────────────────────────────────────
 
-// ── CaptionInput ─────────────────────────────────────────────────
 function CaptionInput({
   value, onChangeText, editable,
 }: { value: string; onChangeText: (t: string) => void; editable: boolean }) {
@@ -44,14 +45,24 @@ function CaptionInput({
   );
 }
 
-// ── PhotoPreview ──────────────────────────────────────────────────
-function PhotoPreview({ uri }: { uri: string }) {
+function PhotoPreview({ uri, synced }: { uri: string; synced: boolean }) {
   const fade = React.useRef(new Animated.Value(0)).current;
   return (
-    <View style={sub.previewWrap}>
+    <View style={[sub.previewWrap, !synced && sub.previewUnsynced]}>
       <View style={sub.previewHeader}>
-        <CheckCircle2 size={12} color={MC.green} />
-        <Text style={sub.previewLabel}>Photo captured</Text>
+        {synced ? (
+          <>
+            <CheckCircle2 size={12} color={MC.green} />
+            <Text style={sub.previewLabel}>Photo captured</Text>
+          </>
+        ) : (
+          <>
+            <WifiOff size={12} color={MC.rose} />
+            <Text style={[sub.previewLabel, { color: MC.rose }]}>
+              Offline — will sync when online
+            </Text>
+          </>
+        )}
       </View>
       <Animated.Image
         source={{ uri }}
@@ -65,15 +76,14 @@ function PhotoPreview({ uri }: { uri: string }) {
   );
 }
 
-// ── UploadProgress ────────────────────────────────────────────────
 function UploadProgress({ step }: { step: string }) {
   const pulse = React.useRef(new Animated.Value(0.5)).current;
   React.useEffect(() => {
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(pulse, { toValue: 1,   duration: 600, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1, duration: 600, useNativeDriver: true }),
         Animated.timing(pulse, { toValue: 0.5, duration: 600, useNativeDriver: true }),
-      ])
+      ]),
     );
     loop.start();
     return () => loop.stop();
@@ -88,13 +98,12 @@ function UploadProgress({ step }: { step: string }) {
   );
 }
 
-// ── CaptureButton ─────────────────────────────────────────────────
 function CaptureButton({ loading, onPress }: { loading: boolean; onPress: () => void }) {
   const scale = React.useRef(new Animated.Value(1)).current;
   const press = () => {
     Animated.sequence([
       Animated.spring(scale, { toValue: 0.95, friction: 4, useNativeDriver: true }),
-      Animated.spring(scale, { toValue: 1,    friction: 4, useNativeDriver: true }),
+      Animated.spring(scale, { toValue: 1, friction: 4, useNativeDriver: true }),
     ]).start();
     onPress();
   };
@@ -118,33 +127,35 @@ function CaptureButton({ loading, onPress }: { loading: boolean; onPress: () => 
 }
 
 const sub = StyleSheet.create({
-  // CaptionInput
   captionWrap: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 10,
     backgroundColor: MC.surface, borderRadius: 12,
     borderWidth: 1, borderColor: MC.border, padding: 12,
   },
-  captionIcon:  { paddingTop: 2 },
+  captionIcon: { paddingTop: 2 },
   captionInput: {
     flex: 1, fontSize: 13, color: MC.textPrimary,
     fontFamily: MF.mono, minHeight: 48, lineHeight: 20,
   },
-  // PhotoPreview
-  previewWrap:   { borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: `${MC.green}44` },
+  previewWrap: {
+    borderRadius: 12, overflow: 'hidden',
+    borderWidth: 1, borderColor: `${MC.green}44`,
+  },
+  previewUnsynced: {
+    borderColor: `${MC.rose}66`,
+  },
   previewHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     backgroundColor: `${MC.green}14`, paddingHorizontal: 12, paddingVertical: 8,
   },
-  previewLabel:  { fontSize: 11, color: MC.green, fontFamily: MF.mono },
-  previewImg:    { width: '100%', height: 180 },
-  // UploadProgress
-  progressWrap:  {
+  previewLabel: { fontSize: 11, color: MC.green, fontFamily: MF.mono },
+  previewImg: { width: '100%', height: 180 },
+  progressWrap: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: MC.goldDim, borderRadius: 10,
     borderWidth: 1, borderColor: `${MC.gold}44`, padding: 12,
   },
-  progressText:  { fontSize: 12, color: MC.gold, fontFamily: MF.mono },
-  // CaptureButton
+  progressText: { fontSize: 12, color: MC.gold, fontFamily: MF.mono },
   captureBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
     backgroundColor: MC.green, borderRadius: 14,
@@ -159,9 +170,7 @@ const sub = StyleSheet.create({
   },
 });
 
-// ─────────────────────────────────────────────────────────────────
-// CoordPin SVG — decorative pin rendered with react-native-svg
-// ─────────────────────────────────────────────────────────────────
+// CoordPin
 function CoordPin({ color = MC.blue }: { color?: string }) {
   return (
     <Svg width={10} height={14} viewBox="0 0 10 14">
@@ -175,19 +184,17 @@ function CoordPin({ color = MC.blue }: { color?: string }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────
 // LazyVisitCard
-// ─────────────────────────────────────────────────────────────────
 const LazyVisitCard = memo(function LazyVisitCard({
   item, expanded, onToggle,
 }: {
-  item:     VisitPhoto;
+  item: VisitPhoto;
   expanded: boolean;
   onToggle: (id: string | number) => void;
 }) {
   const [imgLoading, setImgLoading] = useState(true);
   const fadeAnim = React.useRef(new Animated.Value(0)).current;
-  const rotAnim  = React.useRef(new Animated.Value(0)).current;
+  const rotAnim = React.useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.timing(rotAnim, {
@@ -218,25 +225,33 @@ const LazyVisitCard = memo(function LazyVisitCard({
     inputRange: [0, 1], outputRange: ['0deg', '90deg'],
   });
 
+  const isLocal = String(item.id).startsWith('local');
+
   return (
-    <View style={card.wrap}>
+    <View style={[card.wrap, isLocal && card.wrapLocal]}>
       <TouchableOpacity
         style={card.header}
         onPress={() => onToggle(item.id)}
         activeOpacity={0.72}
       >
-        {/* Accent bar */}
-        <View style={[card.accent, expanded && card.accentOn]} />
+        <View style={[card.accent, expanded && card.accentOn, isLocal && card.accentLocal]} />
 
-        {/* Thumbnail placeholder icon */}
         <View style={[card.thumb, expanded && card.thumbOn]}>
           <ImageIcon size={16} color={expanded ? MC.green : MC.textFaint} />
         </View>
 
         <View style={card.info}>
-          {item.caption
-            ? <Text style={card.caption} numberOfLines={expanded ? undefined : 1}>{item.caption}</Text>
-            : <Text style={card.captionEmpty}>No caption</Text>}
+          <View style={card.titleRow}>
+            {item.caption
+              ? <Text style={card.caption} numberOfLines={expanded ? undefined : 1}>{item.caption}</Text>
+              : <Text style={card.captionEmpty}>No caption</Text>}
+            {isLocal && (
+              <View style={card.unsyncedPill}>
+                <CloudOff size={9} color={MC.rose} />
+                <Text style={card.unsyncedText}>Not synced</Text>
+              </View>
+            )}
+          </View>
 
           <View style={card.meta}>
             <Clock size={9} color={MC.textFaint} />
@@ -253,13 +268,11 @@ const LazyVisitCard = memo(function LazyVisitCard({
           )}
         </View>
 
-        {/* Animated chevron */}
         <Animated.View style={{ transform: [{ rotate: chevronRotation }] }}>
-          <ChevronRight size={16} color={expanded ? MC.green : MC.textSub} />
+          <ImageIcon size={16} color={expanded ? MC.green : MC.textSub} />
         </Animated.View>
       </TouchableOpacity>
 
-      {/* Lazy image — only mounted after expand */}
       {expanded && (
         <View style={card.imageSection}>
           <View style={card.divider} />
@@ -289,22 +302,33 @@ const card = StyleSheet.create({
     backgroundColor: MC.surface, borderRadius: 14,
     overflow: 'hidden', borderWidth: 1, borderColor: MC.border, marginBottom: 10,
   },
-  header:    { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 10 },
-  accent:    { width: 3, alignSelf: 'stretch', borderRadius: 2, backgroundColor: MC.textFaint },
-  accentOn:  { backgroundColor: MC.green },
-  thumb:     {
+  wrapLocal: {
+    borderColor: `${MC.rose}55`,
+  },
+  header: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 10 },
+  accent: { width: 3, alignSelf: 'stretch', borderRadius: 2, backgroundColor: MC.textFaint },
+  accentOn: { backgroundColor: MC.green },
+  accentLocal: { backgroundColor: MC.rose },
+  thumb: {
     width: 36, height: 36, borderRadius: 8, backgroundColor: MC.surfaceAlt,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1, borderColor: MC.border,
   },
-  thumbOn:   { borderColor: `${MC.green}55`, backgroundColor: `${MC.green}10` },
-  info:      { flex: 1, gap: 4 },
-  caption:   { fontSize: 13, fontWeight: '700', color: MC.textPrimary, fontFamily: MF.display },
+  thumbOn: { borderColor: `${MC.green}55`, backgroundColor: `${MC.green}10` },
+  info: { flex: 1, gap: 4 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6 },
+  caption: { fontSize: 13, fontWeight: '700', color: MC.textPrimary, fontFamily: MF.display },
   captionEmpty: { fontSize: 12, fontStyle: 'italic', color: MC.textFaint, fontFamily: MF.mono },
-  meta:      { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  metaText:  { fontSize: 10, color: MC.textSub, fontFamily: MF.mono },
-  imageSection:    { paddingHorizontal: 14, paddingBottom: 14 },
-  divider:         { height: 1, backgroundColor: MC.border, marginBottom: 12 },
+  unsyncedPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 2,
+    borderRadius: 999, backgroundColor: `${MC.rose}15`,
+  },
+  unsyncedText: { fontSize: 9, color: MC.rose, fontFamily: MF.mono },
+  meta: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  metaText: { fontSize: 10, color: MC.textSub, fontFamily: MF.mono },
+  imageSection: { paddingHorizontal: 14, paddingBottom: 14 },
+  divider: { height: 1, backgroundColor: MC.border, marginBottom: 12 },
   imageWrap: {
     borderRadius: 10, overflow: 'hidden', minHeight: 200,
     backgroundColor: MC.surfaceAlt, justifyContent: 'center', alignItems: 'center',
@@ -321,21 +345,23 @@ const card = StyleSheet.create({
 // VisitPhotoScreen
 // ─────────────────────────────────────────────────────────────────
 export default function VisitPhotoScreen() {
-  const employee = useAuthStore((s) => s.employee);
+  const employee = useAuthStore(s => s.employee);
+  const isOnline = useOfflineStore(s => s.isOnline);
 
-  const [caption,       setCaption]       = useState('');
-  const [photoUrl,      setPhotoUrl]      = useState<string | null>(null);
-  const [loading,       setLoading]       = useState(false);
-  const [uploadStep,    setUploadStep]    = useState<string | null>(null);
-  const [visits,        setVisits]        = useState<VisitPhoto[]>([]);
+  const [caption, setCaption] = useState('');
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [lastSynced, setLastSynced] = useState<boolean | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [uploadStep, setUploadStep] = useState<string | null>(null);
+  const [visits, setVisits] = useState<VisitPhoto[]>([]);
   const [loadingVisits, setLoadingVisits] = useState(false);
-  const [refreshing,    setRefreshing]    = useState(false);
-  const [expandedId,    setExpandedId]    = useState<string | number | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | number | null>(null);
 
   const loadVisits = async () => {
     if (!employee?.id) return;
     try {
-      const data = await apiGet<VisitPhoto[]>(`/visits/${employee.id}`, { limit: 20 });
+      const { data } = await offlineGet<VisitPhoto[]>(`/visits/${employee.id}`, 5 * 60_000);
       setVisits(data);
     } catch (e) {
       console.error('VisitPhotoScreen load error:', e);
@@ -345,7 +371,10 @@ export default function VisitPhotoScreen() {
     }
   };
 
-  useEffect(() => { setLoadingVisits(true); loadVisits(); }, [employee?.id]);
+  useEffect(() => {
+    setLoadingVisits(true);
+    loadVisits();
+  }, [employee?.id]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -354,7 +383,7 @@ export default function VisitPhotoScreen() {
   }, [employee?.id]);
 
   const handleToggle = useCallback((id: string | number) => {
-    setExpandedId((prev) => (prev === id ? null : id));
+    setExpandedId(prev => (prev === id ? null : id));
   }, []);
 
   if (loadingVisits && visits.length === 0) {
@@ -368,30 +397,44 @@ export default function VisitPhotoScreen() {
   const handleCapture = async () => {
     setLoading(true);
     setPhotoUrl(null);
+    setLastSynced(null);
     const captionAtCapture = caption;
+
     try {
       const visit: VisitRecord | null = await captureAndUploadVisitPhoto(
         captionAtCapture,
-        (step) => setUploadStep(step),
+        step => setUploadStep(step),
       );
-      if (!visit) { setUploadStep(null); return; }
+      if (!visit) {
+        setUploadStep(null);
+        return;
+      }
 
       setPhotoUrl(visit.photo_url);
+      setLastSynced(visit.synced);
       setCaption('');
       setUploadStep(null);
 
       const newVisit: VisitPhoto = {
-        id:          visit.visit_id,
+        id: visit.visit_id,
         employee_id: visit.employee_id,
-        photo_url:   visit.photo_url,
-        caption:     visit.caption,
-        lat:         visit.lat,
-        lng:         visit.lng,
+        photo_url: visit.photo_url,
+        caption: visit.caption,
+        lat: visit.lat,
+        lng: visit.lng,
         uploaded_at: visit.visited_at,
       };
-      setVisits((prev) => [newVisit, ...prev]);
+      setVisits(prev => [newVisit, ...prev]);
       setExpandedId(visit.visit_id);
-      Alert.alert('Visit Logged', 'Your visit photo has been saved successfully.');
+
+      if (visit.synced) {
+        Alert.alert('Visit Logged', 'Your visit photo has been saved successfully.');
+      } else {
+        Alert.alert(
+          'Visit Saved Offline',
+          'You are offline. This visit will sync automatically when your connection returns.',
+        );
+      }
     } catch (e: any) {
       setUploadStep(null);
       const message =
@@ -407,90 +450,97 @@ export default function VisitPhotoScreen() {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={s.keyboardView}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView
-        style={s.scroll}
-        contentContainerStyle={s.container}
-        keyboardShouldPersistTaps="handled"
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={MC.green}
-            colors={[MC.green]}
-          />
-        }
-        showsVerticalScrollIndicator={false}
+    <SafeAreaView style={s.keyboardView} edges={['top', 'left', 'right']}>
+      <KeyboardAvoidingView
+        style={s.keyboardView}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        {/* ── Header ── */}
-        <View style={s.headerBlock}>
-          <View style={s.kickerRow}>
-            <Camera size={10} color={MC.textFaint} />
-            <Text style={s.kicker}>VISIT LOG</Text>
-          </View>
-          <Text style={s.title}>Log Visit</Text>
-          <Text style={s.subtitle}>
-            Capture a photo to record your visit with GPS location.
-          </Text>
-        </View>
-
-        <CaptionInput value={caption} onChangeText={setCaption} editable={!loading} />
-        {photoUrl   && <PhotoPreview uri={photoUrl} />}
-        {uploadStep && <UploadProgress step={uploadStep} />}
-        <CaptureButton loading={loading} onPress={handleCapture} />
-
-        {/* ── Visit history ── */}
-        {visits.length > 0 && (
-          <View style={s.historySection}>
-            <View style={s.historyHeader}>
-              <View style={s.historyTitleRow}>
-                <History size={13} color={MC.green} />
-                <Text style={s.historyTitle}>Visit History</Text>
-              </View>
-              <View style={s.historyCountPill}>
-                <Hash size={9} color={MC.textFaint} />
-                <Text style={s.historyCount}>{visits.length}</Text>
-              </View>
+        <ScrollView
+          style={s.scroll}
+          contentContainerStyle={s.container}
+          keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={MC.green}
+              colors={[MC.green]}
+            />
+          }
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={s.headerBlock}>
+            <View style={s.kickerRow}>
+              <Camera size={10} color={MC.textFaint} />
+              <Text style={s.kicker}>VISIT LOG</Text>
             </View>
-            <Text style={s.historyHint}>Tap a row to load its photo</Text>
-
-            {visits.map((v) => (
-              <LazyVisitCard
-                key={String(v.id)}
-                item={v}
-                expanded={expandedId === v.id}
-                onToggle={handleToggle}
-              />
-            ))}
+            <Text style={s.title}>Log Visit</Text>
+            <Text style={s.subtitle}>
+              Capture a photo to record your visit with GPS location.
+            </Text>
+            {!isOnline && (
+              <View style={s.offlineRow}>
+                <CloudOff size={12} color={MC.rose} />
+                <Text style={s.offlineText}>
+                  You are offline. New visits will be saved locally and synced later.
+                </Text>
+              </View>
+            )}
           </View>
-        )}
 
-        {/* ── Empty state ── */}
-        {visits.length === 0 && !loadingVisits && (
-          <View style={s.emptyState}>
-            <View style={s.emptyIconWrap}>
-              <Inbox size={32} color={MC.textFaint} />
+          <CaptionInput value={caption} onChangeText={setCaption} editable={!loading} />
+          {photoUrl && <PhotoPreview uri={photoUrl} synced={lastSynced ?? true} />}
+          {uploadStep && <UploadProgress step={uploadStep} />}
+          <CaptureButton loading={loading} onPress={handleCapture} />
+
+          {visits.length > 0 && (
+            <View style={s.historySection}>
+              <View style={s.historyHeader}>
+                <View style={s.historyTitleRow}>
+                  <History size={13} color={MC.green} />
+                  <Text style={s.historyTitle}>Visit History</Text>
+                </View>
+                <View style={s.historyCountPill}>
+                  <Hash size={9} color={MC.textFaint} />
+                  <Text style={s.historyCount}>{visits.length}</Text>
+                </View>
+              </View>
+              <Text style={s.historyHint}>Tap a row to load its photo</Text>
+
+              {visits.map(v => (
+                <LazyVisitCard
+                  key={String(v.id)}
+                  item={v}
+                  expanded={expandedId === v.id}
+                  onToggle={handleToggle}
+                />
+              ))}
             </View>
-            <Text style={s.emptyText}>No visits logged yet</Text>
-            <Text style={s.emptySub}>Capture your first visit above</Text>
-          </View>
-        )}
-      </ScrollView>
-    </KeyboardAvoidingView>
+          )}
+
+          {visits.length === 0 && !loadingVisits && (
+            <View style={s.emptyState}>
+              <View style={s.emptyIconWrap}>
+                <Inbox size={32} color={MC.textFaint} />
+              </View>
+              <Text style={s.emptyText}>No visits logged yet</Text>
+              <Text style={s.emptySub}>Capture your first visit above</Text>
+            </View>
+          )}
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
   keyboardView: { flex: 1, backgroundColor: MC.bg },
-  scroll:       { flex: 1 },
-  container:    { padding: 24, paddingBottom: 48, gap: 16 },
-  center:       { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: MC.bg },
+  scroll: { flex: 1 },
+  container: { padding: 24, paddingBottom: 48, gap: 16 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: MC.bg },
 
-  headerBlock:  { marginBottom: 4 },
-  kickerRow:    { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 6 },
+  headerBlock: { marginBottom: 4 },
+  kickerRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 6 },
   kicker: {
     fontSize: 9, fontWeight: '800', color: MC.textFaint,
     fontFamily: MF.mono, letterSpacing: 1.6, textTransform: 'uppercase',
@@ -500,13 +550,19 @@ const s = StyleSheet.create({
     fontFamily: MF.display, letterSpacing: 0.2,
   },
   subtitle: { fontSize: 12, color: MC.textSub, marginTop: 4, fontFamily: MF.mono },
+  offlineRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8,
+    backgroundColor: `${MC.rose}12`, borderRadius: 8,
+    paddingHorizontal: 8, paddingVertical: 6,
+  },
+  offlineText: { fontSize: 11, color: MC.rose, fontFamily: MF.mono },
 
-  historySection:  { marginTop: 8 },
+  historySection: { marginTop: 8 },
   historyHeader: {
     flexDirection: 'row', justifyContent: 'space-between',
     alignItems: 'center', marginBottom: 4,
   },
-  historyTitleRow:  { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  historyTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   historyTitle: {
     fontSize: 13, fontWeight: '800', color: MC.textPrimary,
     fontFamily: MF.mono, letterSpacing: 1, textTransform: 'uppercase',
@@ -518,17 +574,17 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: MC.border,
   },
   historyCount: { fontSize: 10, color: MC.textFaint, fontFamily: MF.mono, fontWeight: '600' },
-  historyHint:  {
+  historyHint: {
     fontSize: 10, color: MC.textFaint, fontFamily: MF.mono,
     marginBottom: 12, fontStyle: 'italic',
   },
 
-  emptyState:   { alignItems: 'center', paddingVertical: 40, gap: 8 },
+  emptyState: { alignItems: 'center', paddingVertical: 40, gap: 8 },
   emptyIconWrap: {
     width: 64, height: 64, borderRadius: 32,
     backgroundColor: MC.surfaceAlt, borderWidth: 1, borderColor: MC.border,
     alignItems: 'center', justifyContent: 'center', marginBottom: 4,
   },
   emptyText: { fontSize: 14, fontWeight: '700', color: MC.textSub, fontFamily: MF.display },
-  emptySub:  { fontSize: 11, color: MC.textFaint, fontFamily: MF.mono },
+  emptySub: { fontSize: 11, color: MC.textFaint, fontFamily: MF.mono },
 });

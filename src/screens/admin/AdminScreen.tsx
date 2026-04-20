@@ -1,63 +1,90 @@
-// src/screens/admin/AdminScreen.tsx
 import React, {
   useState, useEffect, useCallback, useRef, useMemo, memo,
 } from 'react';
 import {
-  View, Text, StyleSheet, FlatList,
-  TouchableOpacity, RefreshControl, Animated,
-  SafeAreaView, StatusBar, Alert, useWindowDimensions,
-  Platform, SectionList, ActivityIndicator,
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  RefreshControl,
+  Animated,
+  StatusBar,
+  Alert,
+  useWindowDimensions,
+  Platform,
+  SectionList,
+  ActivityIndicator,
 } from 'react-native';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import {
-  Wifi, Camera, Users, BatteryLow, Battery,
-  LayoutDashboard, Users2, Image as ImageIcon,
-  Map, ImagePlus, User, LogOut,
-  MapPin, Zap, RadioTower, Inbox,
-  ChevronRight, type LucideIcon,
+  Wifi,
+  Camera,
+  Users,
+  BatteryLow,
+  Battery,
+  LayoutDashboard,
+  Users2,
+  Image as ImageIcon,
+  Map,
+  ImagePlus,
+  User,
+  LogOut,
+  MapPin,
+  Zap,
+  RadioTower,
+  Inbox,
+  ChevronRight,
+  WifiOff,
+  CloudOff,
+  type LucideIcon,
 } from 'lucide-react-native';
-
-import { useAuthStore }        from '../../store/authStore';
-import { useLocationStore }    from '../../store/locationStore';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useAuthStore } from '../../store/authStore';
+import { useLocationStore } from '../../store/locationStore';
 import { useAdminRealtimeMap } from '../../hooks/useAdminRealtimeMap';
-
-import ErrorBox       from '../../components/shared/ErrorBox';
+import ErrorBox from '../../components/shared/ErrorBox';
 import LoadingOverlay from '../../components/shared/LoadingOverlay';
-
-import { apiGet }                   from '../../services/api';
+import { useOfflineStore } from '../../store/offlineStore';
+import { apiGet } from '../../services/api';
 import { LiveEmployee, VisitPhoto } from '../../types';
 
-const VISITS_PAGE_SIZE = 20;
-
-// ─────────────────────────────────────────────────────────────────
-// Design Tokens
-// ─────────────────────────────────────────────────────────────────
+// Design tokens (C, F) as in your paste
 const C = {
-  bg:          '#080C14',
-  surface:     '#0E1520',
-  surfaceAlt:  '#131B28',
+  bg: '#080C14',
+  surface: '#0E1520',
+  surfaceAlt: '#131B28',
   surfaceLift: '#1A2438',
-  green:       '#10D876',
-  greenDim:    '#0A7A43',
-  greenGlow:   'rgba(16,216,118,0.15)',
-  gold:        '#F4B942',
-  goldDim:     'rgba(244,185,66,0.12)',
-  rose:        '#F05A7E',
-  roseDim:     'rgba(240,90,126,0.12)',
-  blue:        '#4B8EF1',
-  blueDim:     'rgba(75,142,241,0.12)',
+  green: '#10D876',
+  greenDim: 'rgba(16,216,118,0.12)',
+  greenGlow: 'rgba(16,216,118,0.15)',
+  gold: '#F4B942',
+  goldDim: 'rgba(244,185,66,0.12)',
+  rose: '#F05A7E',
+  roseDim: 'rgba(240,90,126,0.12)',
+  blue: '#4B8EF1',
+  blueDim: 'rgba(75,142,241,0.12)',
   textPrimary: '#E8EDF5',
-  textSub:     '#8A95A8',
-  textFaint:   '#3D4A5C',
-  border:      '#1C2840',
-  borderBright:'#2A3B55',
+  textSub: '#8A95A8',
+  textFaint: '#3D4A5C',
+  border: '#1C2840',
+  borderBright: '#2A3B55',
 };
 
 const F = {
-  display: Platform.select({ ios: 'Georgia',  android: 'serif',     default: 'Georgia' }),
-  mono:    Platform.select({ ios: 'Menlo',     android: 'monospace', default: 'monospace' }),
+  display: Platform.select({
+    ios: 'Georgia',
+    android: 'serif',
+    default: 'Georgia',
+  }),
+  mono: Platform.select({
+    ios: 'Menlo',
+    android: 'monospace',
+    default: 'monospace',
+  }),
 };
 
+const VISITS_PAGE_SIZE = 20;
 // ─────────────────────────────────────────────────────────────────
 // Pulse Dot
 // ─────────────────────────────────────────────────────────────────
@@ -809,193 +836,314 @@ const VisitsTab = memo(function VisitsTab({
 // ─────────────────────────────────────────────────────────────────
 export default function AdminScreen() {
   const navigation = useNavigation<any>();
-
-  const logout         = useAuthStore((s) => s.logout);
-  const employee       = useAuthStore((s) => s.employee);
-  const updateEmployee = useLocationStore((s) => s.updateEmployee);
-
+  const logout = useAuthStore(s => s.logout);
+  const employee = useAuthStore(s => s.employee);
+  const { updateEmployee, liveEmployees } = useLocationStore();
   const { attach, detach } = useAdminRealtimeMap();
 
-  const liveEmployees = useLocationStore((s) => s.liveEmployees);
-  const employees     = useMemo(() => Object.values(liveEmployees), [liveEmployees]);
-
-  const [visits,        setVisits]      = useState<VisitPhoto[]>([]);
-  const [visitsPage,    setVisitsPage]  = useState(1);
-  const [hasMoreVisits, setHasMore]     = useState(true);
-  const [loading,       setLoading]     = useState(true);
-  const [refreshing,    setRefreshing]  = useState(false);
-  const [loadingMore,   setLoadingMore] = useState(false);
-  const [error,         setError]       = useState<string | null>(null);
-  const [activeTab,     setActiveTab]   = useState('overview');
+  const [visits, setVisits] = useState<VisitPhoto[]>([]);
+  const [visitsPage, setVisitsPage] = useState(1);
+  const [hasMoreVisits, setHasMore] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'overview' | 'employees' | 'visits'>('overview');
   const [expandedVisitId, setExpandedVisitId] = useState<string | number | null>(null);
 
-  const onToggleVisit = useCallback((id: string | number) => {
-    setExpandedVisitId((prev) => (prev === id ? null : id));
-  }, []);
+  // Offline state
+  const isOnline = useOfflineStore(s => s.isOnline);
+  const offlineQueue = useOfflineStore(s => s.queue);
 
-  const onlineEmployees  = useMemo(() => employees.filter((e) => e.is_online),  [employees]);
-  const offlineEmployees = useMemo(() => employees.filter((e) => !e.is_online), [employees]);
-  const lowBattery       = useMemo(() => employees.filter((e) => e.battery != null && e.battery! < 20), [employees]);
-  const todayVisits      = useMemo(() => {
+  const employees = useMemo(
+    () => Object.values(liveEmployees),
+    [liveEmployees],
+  );
+
+  const onlineEmployees = useMemo(
+    () => employees.filter(e => e.is_online),
+    [employees],
+  );
+  const offlineEmployees = useMemo(
+    () => employees.filter(e => !e.is_online),
+    [employees],
+  );
+  const lowBattery = useMemo(
+    () => employees.filter(e => e.battery != null && e.battery! <= 20),
+    [employees],
+  );
+
+  const todayVisits = useMemo(() => {
     const today = new Date();
-    return visits.filter((v) => {
-      const d = new Date(v.uploaded_at);
-      return d.getDate() === today.getDate() && d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
+    return visits.filter(v => {
+      const d = new Date((v as any).uploaded_at ?? (v as any).visited_at ?? '');
+      if (isNaN(d.getTime())) return false;
+      return (
+        d.getDate() === today.getDate() &&
+        d.getMonth() === today.getMonth() &&
+        d.getFullYear() === today.getFullYear()
+      );
     });
   }, [visits]);
 
-  const tabCounts = useMemo(() => ({
-    overview:  lowBattery.length,
-    employees: onlineEmployees.length,
-    visits:    todayVisits.length,
-  }), [lowBattery.length, onlineEmployees.length, todayVisits.length]);
+  const tabCounts = useMemo(
+    () => ({
+      overview: lowBattery.length,
+      employees: onlineEmployees.length,
+      visits: todayVisits.length,
+    }),
+    [lowBattery.length, onlineEmployees.length, todayVisits.length],
+  );
 
   const seedEmployees = useCallback(async () => {
     try {
-      const empRes = await apiGet<LiveEmployee[]>('/admin/employees/live');
+      const empRes = await apiGet('/admin/employees/live') as LiveEmployee[];
       const list = Array.isArray(empRes) ? empRes : [];
-      list.forEach((emp) => updateEmployee(emp));
+      list.forEach(emp => updateEmployee(emp));
     } catch (e: any) {
-      console.warn('[AdminScreen] seedEmployees failed:', e?.message ?? e);
+      console.warn(
+        'AdminScreen seedEmployees failed:',
+        e?.message ?? e,
+      );
     }
   }, [updateEmployee]);
 
-  const fetchVisits = useCallback(async (page = 1, silent = false) => {
-    if (page === 1 && !silent) setLoading(true);
-    if (page > 1)              setLoadingMore(true);
-    setError(null);
-    try {
-      const raw = await apiGet<VisitPhoto[]>(
-        `/admin/visits?limit=${VISITS_PAGE_SIZE}&offset=${(page - 1) * VISITS_PAGE_SIZE}`,
-      );
-      const visitRes = Array.isArray(raw) ? raw : [];
-      setVisits((prev) => page === 1 ? visitRes : [...prev, ...visitRes]);
-      setHasMore(visitRes.length === VISITS_PAGE_SIZE);
-      setVisitsPage(page);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to load visits');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-      setLoadingMore(false);
-    }
-  }, []);
+  const fetchVisits = useCallback(
+    async (page = 1, silent = false) => {
+      if (page === 1 && !silent) setLoading(true);
+      if (page > 1) setLoadingMore(true);
+      setError(null);
+      try {
+        const raw = await apiGet(
+          `/admin/visits?limit=${VISITS_PAGE_SIZE}&offset=${(page - 1) * VISITS_PAGE_SIZE}`,
+        );
+        const visitRes = Array.isArray(raw) ? (raw as VisitPhoto[]) : [];
+        setVisits(prev => (page === 1 ? visitRes : [...prev, ...visitRes]));
+        setHasMore(visitRes.length === VISITS_PAGE_SIZE);
+        setVisitsPage(page);
+      } catch (e: any) {
+        setError(e?.message ?? 'Failed to load visits');
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+        setLoadingMore(false);
+      }
+    },
+    [],
+  );
 
-const hasFetchedOnce = useRef(false);
+  const hasFetchedOnce = useRef(false);
 
-useFocusEffect(
-  useCallback(() => {
-    // ── Data ──────────────────────────────────────────────────
-    attach();
-    seedEmployees();
-    fetchVisits(1, hasFetchedOnce.current);
-    hasFetchedOnce.current = true;
+  useFocusEffect(
+    useCallback(() => {
+      attach();
+      if (!hasFetchedOnce.current) {
+        seedEmployees();
+        fetchVisits(1);
+        hasFetchedOnce.current = true;
+      }
 
-    return () => { detach(); };
-  }, [attach, detach, seedEmployees, fetchVisits]),
-);
+      const id = setInterval(() => {
+        fetchVisits(1, true);
+      }, 60_000);
 
-  useEffect(() => {
-    const id = setInterval(() => fetchVisits(1, true), 60_000);
-    return () => clearInterval(id);
-  }, [fetchVisits]);
+      return () => {
+        clearInterval(id);
+        detach();
+      };
+    }, [attach, detach, seedEmployees, fetchVisits]),
+  );
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     setExpandedVisitId(null);
     seedEmployees();
     fetchVisits(1, true);
-  }, [fetchVisits, seedEmployees]);
+  }, [seedEmployees, fetchVisits]);
 
   const handleLogout = useCallback(() => {
     Alert.alert(
       'Logout',
       `Logout as ${employee?.name ?? 'Admin'}?`,
-      [{ text: 'Cancel', style: 'cancel' }, { text: 'Logout', style: 'destructive', onPress: logout }],
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Logout',
+          style: 'destructive',
+          onPress: logout,
+        },
+      ],
       { cancelable: true },
     );
   }, [employee?.name, logout]);
 
-  const navigateToMap          = useCallback(() => navigation.navigate('LiveMap'), [navigation]);
-  const navigateToMapWithFocus = useCallback((emp: LiveEmployee) => navigation.navigate('LiveMap', { focusId: emp.employee_id }), [navigation]);
-  const goToEmployees          = useCallback(() => setActiveTab('employees'), []);
-  const goToVisits             = useCallback(() => setActiveTab('visits'),    []);
-  const fetchVisitsPage        = useCallback((page: number) => fetchVisits(page), [fetchVisits]);
+  const navigateToMap = useCallback(() => {
+    navigation.navigate('LiveMap');
+  }, [navigation]);
+
+  const navigateToMapWithFocus = useCallback(
+    (emp: LiveEmployee) => {
+      navigation.navigate('LiveMap', { focusId: emp.employee_id });
+    },
+    [navigation],
+  );
+
+  const goToEmployees = useCallback(() => setActiveTab('employees'), []);
+  const goToVisits = useCallback(() => setActiveTab('visits'), []);
+
+  const fetchVisitsPage = useCallback(
+    (page: number) => fetchVisits(page),
+    [fetchVisits],
+  );
 
   const headerAnim = useRef(new Animated.Value(0)).current;
+
   useEffect(() => {
-    Animated.timing(headerAnim, { toValue: 1, duration: 500, useNativeDriver: true }).start();
+    Animated.timing(headerAnim, {
+      toValue: 1,
+      duration: 500,
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
+  const onToggleVisit = useCallback((id: string | number) => {
+    setExpandedVisitId(prev => (prev === id ? null : id));
   }, []);
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="light-content" backgroundColor="#080C14" />
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+      <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
+      {/* Global loading overlay */}
       <LoadingOverlay
         visible={loading && visits.length === 0 && employees.length === 0}
-        message="Loading dashboard…"
+        message="Loading dashboard"
         variant="dots"
       />
 
+      {/* Offline banner (admin-level) */}
+      {!isOnline && (
+        <View style={styles.offlineBanner}>
+          <CloudOff size={12} color={C.rose} />
+          <Text style={styles.offlineBannerText}>
+            You are offline. Live data and visits will refresh once reconnected.
+          </Text>
+        </View>
+      )}
+
       {/* Header */}
-      <Animated.View style={[styles.header, { opacity: headerAnim }]}>
+      <Animated.View
+        style={[
+          styles.header,
+          { opacity: headerAnim },
+        ]}
+      >
         <View>
           <View style={styles.headerBadge}>
-            <PulseDot color={C.green} size={7} />
-            <Text style={styles.headerBadgeText}>LIVE DASHBOARD</Text>
+            <View style={styles.badgeDot} />
+            <Text style={styles.headerBadgeText}>
+              LIVE DASHBOARD
+            </Text>
           </View>
           <Text style={styles.headerTitle}>Admin Control</Text>
           <Text style={styles.headerSub}>
-            {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
+            {new Date().toLocaleDateString('en-IN', {
+              weekday: 'long',
+              day: 'numeric',
+              month: 'long',
+            })}
           </Text>
         </View>
+
         <View style={styles.headerActions}>
-          {/* Map icon + label replaces 🗺️ Map */}
-          <TouchableOpacity style={styles.mapBtn} onPress={navigateToMap} activeOpacity={0.8}>
+          <TouchableOpacity
+            style={styles.mapBtn}
+            onPress={navigateToMap}
+            activeOpacity={0.8}
+          >
             <Map size={13} color={C.bg} strokeWidth={2.5} />
             <Text style={styles.mapBtnText}>Map</Text>
             {onlineEmployees.length > 0 && (
               <View style={styles.mapBadge}>
-                <Text style={styles.mapBadgeText}>{onlineEmployees.length}</Text>
+                <Text style={styles.mapBadgeText}>
+                  {onlineEmployees.length}
+                </Text>
               </View>
             )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.logoutBtn}
+            onPress={handleLogout}
+            activeOpacity={0.8}
+          >
+            <LogOut size={13} color={C.rose} strokeWidth={2.2} />
           </TouchableOpacity>
         </View>
       </Animated.View>
 
       <GlowLine />
 
+      {/* Tab bar */}
       <View style={styles.tabBarWrapper}>
-        <TabBar active={activeTab} onChange={setActiveTab} counts={tabCounts} />
+        <TabBar
+          active={activeTab}
+          onChange={(key) => {
+            if (key === 'overview' || key === 'employees' || key === 'visits') {
+              setActiveTab(key);
+            }
+          }}
+          counts={tabCounts}
+        />
       </View>
 
+      {/* Content */}
       <View style={styles.content}>
         {activeTab === 'overview' && (
           <OverviewTab
-            error={error} lowBattery={lowBattery}
-            onlineEmployees={onlineEmployees} offlineEmployees={offlineEmployees}
-            employees={employees} todayVisits={todayVisits} visits={visits}
-            refreshing={refreshing} onRefresh={onRefresh}
-            onDismissError={() => setError(null)} onRetry={() => fetchVisits(1)}
-            navigateToMap={navigateToMap} navigateToMapWithFocus={navigateToMapWithFocus}
-            goToEmployees={goToEmployees} goToVisits={goToVisits} handleLogout={handleLogout}
-            expandedVisitId={expandedVisitId} onToggleVisit={onToggleVisit}
+            error={error}
+            lowBattery={lowBattery}
+            onlineEmployees={onlineEmployees}
+            offlineEmployees={offlineEmployees}
+            employees={employees}
+            todayVisits={todayVisits}
+            visits={visits}
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            onDismissError={() => setError(null)}
+            onRetry={() => fetchVisits(1)}
+            navigateToMap={navigateToMap}
+            navigateToMapWithFocus={navigateToMapWithFocus}
+            goToEmployees={goToEmployees}
+            goToVisits={goToVisits}
+            handleLogout={handleLogout}
+            expandedVisitId={expandedVisitId}
+            onToggleVisit={onToggleVisit}
           />
         )}
+
         {activeTab === 'employees' && (
           <EmployeesTab
-            onlineEmployees={onlineEmployees} offlineEmployees={offlineEmployees}
-            refreshing={refreshing} onRefresh={onRefresh}
+            onlineEmployees={onlineEmployees}
+            offlineEmployees={offlineEmployees}
+            refreshing={refreshing}
+            onRefresh={onRefresh}
             navigateToMapWithFocus={navigateToMapWithFocus}
           />
         )}
+
         {activeTab === 'visits' && (
           <VisitsTab
-            visits={visits} todayVisits={todayVisits}
-            refreshing={refreshing} onRefresh={onRefresh}
-            loadingMore={loadingMore} hasMoreVisits={hasMoreVisits}
-            visitsPage={visitsPage} fetchVisits={fetchVisitsPage}
-            expandedVisitId={expandedVisitId} onToggleVisit={onToggleVisit}
+            visits={visits}
+            todayVisits={todayVisits}
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            loadingMore={loadingMore}
+            hasMoreVisits={hasMoreVisits}
+            visitsPage={visitsPage}
+            fetchVisits={fetchVisitsPage}
+            expandedVisitId={expandedVisitId}
+            onToggleVisit={onToggleVisit}
           />
         )}
       </View>
@@ -1003,20 +1151,119 @@ useFocusEffect(
   );
 }
 
+
 const styles = StyleSheet.create({
-  safe:            { flex: 1, backgroundColor: C.bg },
-  header:          { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingHorizontal: 20, paddingTop: 18, paddingBottom: 14 },
-  headerBadge:     { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
-  headerBadgeText: { fontSize: 9, fontWeight: '800', color: C.green, fontFamily: F.mono, letterSpacing: 2 },
-  headerTitle:     { fontSize: 24, fontWeight: '800', color: C.textPrimary, fontFamily: F.display, letterSpacing: -0.5 },
-  headerSub:       { fontSize: 11, color: C.textSub, marginTop: 2, fontFamily: F.mono },
-  headerActions:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
-  mapBtn:          { flexDirection: 'row', alignItems: 'center', backgroundColor: C.green, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, gap: 6 },
-  mapBtnText:      { fontSize: 12, color: C.bg, fontWeight: '800', fontFamily: F.mono },
-  mapBadge:        { backgroundColor: C.bg, borderRadius: 999, minWidth: 18, height: 18, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
-  mapBadgeText:    { fontSize: 10, color: C.green, fontWeight: '800', fontFamily: F.mono },
-  tabBarWrapper:   { paddingHorizontal: 16, paddingVertical: 10 },
-  content:         { flex: 1 },
+  safe: { flex: 1, backgroundColor: C.bg },
+
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: C.roseDim,
+    borderBottomWidth: 1,
+    borderBottomColor: `${C.rose}44`,
+  },
+  offlineBannerText: {
+    flex: 1,
+    fontSize: 11,
+    color: C.rose,
+    fontFamily: F.mono,
+  },
+
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 14,
+  },
+  headerBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6,
+  },
+  badgeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: C.green,
+  },
+  headerBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: C.green,
+    fontFamily: F.mono,
+    letterSpacing: 2,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: C.textPrimary,
+    fontFamily: F.display,
+    letterSpacing: -0.5,
+  },
+  headerSub: {
+    fontSize: 11,
+    color: C.textSub,
+    marginTop: 2,
+    fontFamily: F.mono,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
+  mapBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: C.green,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 999,
+    gap: 6,
+  },
+  mapBtnText: {
+    fontSize: 12,
+    color: C.bg,
+    fontWeight: '800',
+    fontFamily: F.mono,
+  },
+  mapBadge: {
+    backgroundColor: C.bg,
+    borderRadius: 999,
+    minWidth: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  mapBadgeText: {
+    fontSize: 10,
+    color: C.green,
+    fontWeight: '800',
+    fontFamily: F.mono,
+  },
+  logoutBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: C.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.surfaceAlt,
+  },
+
+  tabBarWrapper: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  content: { flex: 1 },
   tabContent:      { padding: 16, gap: 16, paddingBottom: 40 },
   statsGrid:       { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   quickActions:    { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 },

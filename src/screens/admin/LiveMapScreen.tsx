@@ -11,19 +11,21 @@ import Svg, {
   Circle, Path, Defs, RadialGradient, Stop,
 } from 'react-native-svg';
 import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
-import { useFocusEffect }           from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   MapPin, Users, Clock,
   BatteryLow, BatteryMedium, BatteryFull,
-  X, Wifi, WifiOff, LocateFixed,
+  X, Wifi, WifiOff, LocateFixed, CloudOff,
 } from 'lucide-react-native';
 
 import { useAdminRealtimeMap } from '../../hooks/useAdminRealtimeMap';
 import { useLocationStore }    from '../../store/locationStore';
+import { useOfflineStore }     from '../../store/offlineStore';
 import { LiveEmployee }        from '../../types';
 import EmployeeMarker          from '../../components/map/EmployeeMarker';
 import EmployeeListPanel       from '../../components/map/EmployeeListPanel';
-import { MC } from '../../navigation/AppTheme';
+import { MC }                  from '../../navigation/AppTheme';
+
 // ── Palette ───────────────────────────────────────────────────────
 const C = {
   tealDark:   '#085041',
@@ -81,7 +83,11 @@ function StatusPinSVG({ color = C.teal }: { color?: string }) {
 function SeedingDots() {
   return (
     <Svg width={18} height={18} viewBox="0 0 18 18">
-      <Circle cx={9} cy={9} r={7} stroke={C.teal} strokeWidth={1.5} strokeDasharray="4 3" fill="none" strokeLinecap="round" />
+      <Circle
+        cx={9} cy={9} r={7}
+        stroke={C.teal} strokeWidth={1.5}
+        strokeDasharray="4 3" fill="none" strokeLinecap="round"
+      />
     </Svg>
   );
 }
@@ -98,7 +104,10 @@ function InfoRow({ icon, iconBg, label, value, mono }: {
       <View style={[cs.iconPill, { backgroundColor: iconBg }]}>{icon}</View>
       <View style={cs.rowTexts}>
         <Text style={cs.rowLabel}>{label}</Text>
-        <Text style={[cs.rowValue, mono && { fontFamily: 'monospace', fontSize: 10 }]} numberOfLines={1}>
+        <Text
+          style={[cs.rowValue, mono && { fontFamily: 'monospace', fontSize: 10 }]}
+          numberOfLines={1}
+        >
           {value}
         </Text>
       </View>
@@ -166,8 +175,7 @@ const EmployeeInfoCard = memo(function EmployeeInfoCard({
   const battery      = employee.battery;
   const batteryColor = battery == null ? C.muted : battery > 50 ? C.green : battery > 20 ? C.amber : C.pink;
   const batteryBg    = battery == null ? '#f3f0ec' : battery > 50 ? C.greenLight : battery > 20 ? C.amberLight : C.pinkLight;
-
-  const cardBottom = 100 + bottomOffset;
+  const cardBottom   = 100 + bottomOffset;
 
   return (
     <Animated.View style={[cs.card, { bottom: cardBottom, transform: [{ translateY: slideAnim }] }]}>
@@ -180,13 +188,16 @@ const EmployeeInfoCard = memo(function EmployeeInfoCard({
           {employee.role ? <Text style={cs.role}>{employee.role}</Text> : null}
         </View>
         <View style={[cs.pill, { backgroundColor: isOnline ? C.tealLight : C.pinkLight }]}>
-          {isOnline ? <Wifi size={10} color={C.teal} /> : <WifiOff size={10} color={C.pink} />}
+          {isOnline
+            ? <Wifi    size={10} color={C.teal} />
+            : <WifiOff size={10} color={C.pink} />}
           <Text style={[cs.pillText, { color: isOnline ? C.tealDark : C.pink }]}>
             {isOnline ? 'Online' : 'Offline'}
           </Text>
         </View>
         <TouchableOpacity
-          style={cs.closeBtn} onPress={dismiss}
+          style={cs.closeBtn}
+          onPress={dismiss}
           hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
         >
           <X size={13} color={C.muted} />
@@ -260,42 +271,53 @@ const cs = StyleSheet.create({
 // LiveMapScreen
 // ─────────────────────────────────────────────────────────────────
 export default function LiveMapScreen() {
-  const insets = useSafeAreaInsets();
+  const insets   = useSafeAreaInsets();
+  const isOnline = useOfflineStore(s => s.isOnline);
 
   // ── Realtime map data ─────────────────────────────────────────
   const { attach, detach } = useAdminRealtimeMap();
   useFocusEffect(
     useCallback(() => {
+      // Make status bar transparent so map fills edge-to-edge on focus
+      if (Platform.OS === 'android') {
+        StatusBar.setTranslucent(true);
+        StatusBar.setBackgroundColor('transparent');
+      }
+      StatusBar.setBarStyle('dark-content');
+
       attach();
-      return () => detach();
+
+      return () => {
+        // Restore opaque status bar for every other screen
+        if (Platform.OS === 'android') {
+          StatusBar.setTranslucent(false);
+          StatusBar.setBackgroundColor(MC.bg);
+        }
+        StatusBar.setBarStyle('light-content');
+        detach();
+      };
     }, [attach, detach]),
   );
 
-  // ── STATUS BAR: translucent ONLY on this screen ───────────────
-  // Sets transparent/translucent on focus, restores on blur so
-  // every other admin screen keeps its normal opaque status bar.
-  // ── STATUS BAR: translucent ONLY on this screen ───────────────
-// ── STATUS BAR: translucent ONLY on this screen ───────────────
-  
   const mapRef = useRef<MapView>(null);
   const [showList,         setShowList]         = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<LiveEmployee | null>(null);
   const [newIds,           setNewIds]           = useState<Set<string>>(new Set());
   const prevIdsRef = useRef<Set<string>>(new Set());
 
-  const liveEmployees = useLocationStore((s) => s.liveEmployees);
-  const seeding       = useLocationStore((s) => s.seeding);
-  const getActive     = useLocationStore((s) => s.getActiveEmployees);
-  const getStale      = useLocationStore((s) => s.getStaleEmployees);
+  const liveEmployees = useLocationStore(s => s.liveEmployees);
+  const seeding       = useLocationStore(s => s.seeding);
+  const getActive     = useLocationStore(s => s.getActiveEmployees);
+  const getStale      = useLocationStore(s => s.getStaleEmployees);
 
   const allMarkers      = useMemo(() => Object.values(liveEmployees), [liveEmployees]);
   const activeEmployees = useMemo(() => getActive(), [liveEmployees]);
   const staleEmployees  = useMemo(() => getStale(),  [liveEmployees]);
 
   useEffect(() => {
-    const currentIds = new Set(allMarkers.map((e) => e.employee_id));
+    const currentIds = new Set(allMarkers.map(e => e.employee_id));
     const incoming   = new Set<string>();
-    currentIds.forEach((id) => { if (!prevIdsRef.current.has(id)) incoming.add(id); });
+    currentIds.forEach(id => { if (!prevIdsRef.current.has(id)) incoming.add(id); });
     prevIdsRef.current = currentIds;
     if (incoming.size === 0) return;
     setNewIds(incoming);
@@ -329,14 +351,17 @@ export default function LiveMapScreen() {
 
   const handleMapPress = useCallback(() => setSelectedEmployee(null), []);
 
+  // Positions relative to safe area edges
+  const topOffset      = insets.top + 12;
   const bottomBarBottom = 28 + insets.bottom;
-  const topOffset       = insets.top + 12;
 
   return (
-    
+    // No SafeAreaView here — map intentionally fills entire screen
+    // including behind status bar. All overlays are offset manually
+    // using insets so they don't collide with system UI.
     <View style={s.container}>
-<StatusBar barStyle="light-content" backgroundColor={MC.bg} />
-      {/* Map fills entire screen including behind status bar */}
+
+      {/* Map fills entire screen (behind status bar too) */}
       <MapView
         ref={mapRef}
         style={StyleSheet.absoluteFill}
@@ -349,7 +374,7 @@ export default function LiveMapScreen() {
         moveOnMarkerPress={false}
         onPress={handleMapPress}
       >
-        {allMarkers.map((emp) => (
+        {allMarkers.map(emp => (
           <EmployeeMarker
             key={emp.employee_id}
             employee={emp}
@@ -359,9 +384,23 @@ export default function LiveMapScreen() {
         ))}
       </MapView>
 
-      {/* Seeding banner — sits below status bar via topOffset */}
+      {/* Offline pill — floats just below status bar */}
+      {!isOnline && (
+        <View
+          style={[s.offlinePill, { top: topOffset }]}
+          pointerEvents="none"
+        >
+          <CloudOff size={12} color={C.pink} />
+          <Text style={s.offlinePillText}>Offline — map data may be outdated</Text>
+        </View>
+      )}
+
+      {/* Seeding banner — sits below offline pill if both showing */}
       {seeding && (
-        <View style={[s.seedingBanner, { top: topOffset }]} pointerEvents="none">
+        <View
+          style={[s.seedingBanner, { top: !isOnline ? topOffset + 40 : topOffset }]}
+          pointerEvents="none"
+        >
           <SeedingDots />
           <Text style={s.seedingText}>Loading employees…</Text>
         </View>
@@ -380,7 +419,7 @@ export default function LiveMapScreen() {
         </View>
       )}
 
-      {/* Bottom bar — sits above home indicator via bottomBarBottom */}
+      {/* Bottom bar — sits above home indicator */}
       <View style={[s.bottomBar, { bottom: bottomBarBottom }]} pointerEvents="box-none">
         <View style={s.legendPill}>
           <Wifi    size={12} color={C.teal} />
@@ -429,38 +468,56 @@ export default function LiveMapScreen() {
 // Styles
 // ─────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  container:     { flex: 1, backgroundColor: C.surfaceAlt },
+  // No backgroundColor on container — map tiles show through
+  container: { flex: 1 },
+
+  offlinePill: {
+    position: 'absolute', alignSelf: 'center',
+    flexDirection: 'row', alignItems: 'center', gap: 7,
+    backgroundColor: C.pinkLight,
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderRadius: 999,
+    elevation: 6,
+    shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8,
+    borderWidth: 0.5, borderColor: `${C.pink}44`,
+  },
+  offlinePillText: {
+    fontSize: 12, color: C.pink, fontWeight: '600',
+  },
 
   seedingBanner: {
     position: 'absolute', alignSelf: 'center',
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: C.surface, paddingHorizontal: 16, paddingVertical: 9,
+    backgroundColor: C.surface,
+    paddingHorizontal: 16, paddingVertical: 9,
     borderRadius: 999, elevation: 4,
     shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8,
     borderWidth: 0.5, borderColor: C.border,
   },
-  seedingText:   { fontSize: 13, color: C.muted, fontWeight: '500' },
+  seedingText: { fontSize: 13, color: C.muted, fontWeight: '500' },
 
   emptyState:    { position: 'absolute', top: '35%', alignSelf: 'center', alignItems: 'center', gap: 10 },
   emptyIconWrap: { width: 72, height: 72, borderRadius: 20, backgroundColor: C.tealLight, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
   emptyTitle:    { fontSize: 16, fontWeight: '700', color: C.ink },
   emptySubtitle: { fontSize: 13, color: C.muted, textAlign: 'center', maxWidth: 240, lineHeight: 19 },
 
-  bottomBar:     { position: 'absolute', left: 14, right: 14, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  legendPill:    {
+  bottomBar: { position: 'absolute', left: 14, right: 14, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  legendPill: {
     flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: C.surface, paddingHorizontal: 14, paddingVertical: 10,
+    backgroundColor: C.surface,
+    paddingHorizontal: 14, paddingVertical: 10,
     borderRadius: 14, borderWidth: 0.5, borderColor: C.border,
     elevation: 3, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6,
   },
-  legendText:    { fontSize: 13, fontWeight: '500', color: C.inkMid },
-  legendSep:     { width: 0.5, height: 14, backgroundColor: C.border, marginHorizontal: 2 },
-  listBtn:       {
-    backgroundColor: C.tealDark, paddingHorizontal: 18, paddingVertical: 10,
+  legendText:  { fontSize: 13, fontWeight: '500', color: C.inkMid },
+  legendSep:   { width: 0.5, height: 14, backgroundColor: C.border, marginHorizontal: 2 },
+  listBtn: {
+    backgroundColor: C.tealDark,
+    paddingHorizontal: 18, paddingVertical: 10,
     borderRadius: 14, flexDirection: 'row', alignItems: 'center', gap: 8,
     elevation: 5, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 8,
   },
-  listBtnText:   { color: C.tealLight, fontWeight: '700', fontSize: 13 },
-  badge:         { backgroundColor: C.tealLight, borderRadius: 999, minWidth: 20, height: 20, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 },
-  badgeText:     { fontSize: 11, fontWeight: '800', color: C.tealDark },
+  listBtnText: { color: C.tealLight, fontWeight: '700', fontSize: 13 },
+  badge:       { backgroundColor: C.tealLight, borderRadius: 999, minWidth: 20, height: 20, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 },
+  badgeText:   { fontSize: 11, fontWeight: '800', color: C.tealDark },
 });
