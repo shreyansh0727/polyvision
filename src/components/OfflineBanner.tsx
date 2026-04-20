@@ -1,8 +1,8 @@
-import React, { useEffect, useRef } from 'react';
-import { Animated, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Animated, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useOfflineStore } from '../store/offlineStore';
-import { WifiOff, Wifi, RefreshCw } from 'lucide-react-native';
+import { WifiOff, Wifi, RefreshCw, X } from 'lucide-react-native';
 import { MF } from '../navigation/AppTheme';
 
 export function OfflineBanner(): React.ReactElement | null {
@@ -10,9 +10,37 @@ export function OfflineBanner(): React.ReactElement | null {
   const queue    = useOfflineStore(s => s.queue);
   const insets   = useSafeAreaInsets();
 
-  const slideAnim  = useRef(new Animated.Value(80)).current; // starts below screen
+  const slideAnim  = useRef(new Animated.Value(80)).current;
   const dotOpacity = useRef(new Animated.Value(1)).current;
   const wasOnline  = useRef(true);
+
+  // Hidden means user manually dismissed — stays hidden until connectivity changes again
+  const [hidden, setHidden]       = useState(false);
+  const hiddenRef                 = useRef(false);
+
+  const slideOut = (then?: () => void) => {
+    Animated.spring(slideAnim, {
+      toValue: 80,
+      useNativeDriver: true,
+      damping: 22,
+      stiffness: 180,
+    }).start(then);
+  };
+
+  const slideIn = () => {
+    Animated.spring(slideAnim, {
+      toValue: 0,
+      useNativeDriver: true,
+      damping: 20,
+      stiffness: 200,
+    }).start();
+  };
+
+  const dismiss = () => {
+    hiddenRef.current = true;
+    setHidden(true);
+    slideOut();
+  };
 
   // Pulsing dot loop
   useEffect(() => {
@@ -28,24 +56,27 @@ export function OfflineBanner(): React.ReactElement | null {
 
   useEffect(() => {
     if (!isOnline) {
+      // Connectivity dropped — always re-show, overriding any previous dismiss
       wasOnline.current = false;
-      Animated.spring(slideAnim, {
-        toValue: 0,
-        useNativeDriver: true,
-        damping: 20,
-        stiffness: 200,
-      }).start();
+      hiddenRef.current = false;
+      setHidden(false);
+      slideIn();
     } else {
       if (!wasOnline.current) {
-        Animated.sequence([
-          Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, damping: 20, stiffness: 200 }),
-          Animated.delay(2200),
-          Animated.spring(slideAnim, { toValue: 80, useNativeDriver: true, damping: 22, stiffness: 180 }),
-        ]).start();
         wasOnline.current = true;
+        // Only show "back online" flash if user hadn't dismissed
+        if (!hiddenRef.current) {
+          Animated.sequence([
+            Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, damping: 20, stiffness: 200 }),
+            Animated.delay(2200),
+          ]).start(() => slideOut());
+        }
+        // Reset dismiss state once back online
+        hiddenRef.current = false;
+        setHidden(false);
       }
     }
-  }, [isOnline, slideAnim]);
+  }, [isOnline]);
 
   const queueCount = queue.length;
 
@@ -55,7 +86,6 @@ export function OfflineBanner(): React.ReactElement | null {
         styles.banner,
         isOnline ? styles.online : styles.offline,
         {
-          // Sit just above the home indicator / nav bar
           bottom: insets.bottom + 12,
           transform: [{ translateY: slideAnim }],
         },
@@ -99,6 +129,18 @@ export function OfflineBanner(): React.ReactElement | null {
           {isOnline ? (queueCount > 0 ? `${queueCount} queued` : 'Live') : 'Offline'}
         </Text>
       </View>
+
+      {/* Dismiss — only shown while offline; auto-dismiss handles the online flash */}
+      {!isOnline && (
+        <TouchableOpacity
+          style={[styles.closeBtn, styles.closeBtnOffline]}
+          onPress={dismiss}
+          hitSlop={10}
+          activeOpacity={0.7}
+        >
+          <X size={11} color="#f87171" />
+        </TouchableOpacity>
+      )}
     </Animated.View>
   );
 }
@@ -112,45 +154,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingLeft: 14,
+    paddingRight: 10,           // tighter right so X doesn't push too far
     gap: 10,
-    borderRadius: 14,           // pill-card shape, floats above nav
+    borderRadius: 14,
     borderWidth: 0.5,
   },
 
-  offline: {
-    backgroundColor: '#7f1d1d',
-    borderColor: '#991b1b',
-  },
-  online: {
-    backgroundColor: '#14532d',
-    borderColor: '#166534',
-  },
+  offline: { backgroundColor: '#7f1d1d', borderColor: '#991b1b' },
+  online:  { backgroundColor: '#14532d', borderColor: '#166534' },
 
-  dot: {
-    width: 7,
-    height: 7,
-    borderRadius: 999,
-    flexShrink: 0,
-  },
+  dot: { width: 7, height: 7, borderRadius: 999, flexShrink: 0 },
   dotOffline: { backgroundColor: '#f87171' },
   dotOnline:  { backgroundColor: '#4ade80' },
 
   textBlock: { flex: 1 },
-  title: {
-    fontSize: 11,
-    fontWeight: '700',
-    fontFamily: MF.mono,
-    letterSpacing: 0.4,
-  },
+  title: { fontSize: 11, fontWeight: '700', fontFamily: MF.mono, letterSpacing: 0.4 },
   titleOffline: { color: '#fca5a5' },
   titleOnline:  { color: '#86efac' },
-  sub: {
-    fontSize: 10,
-    fontFamily: MF.mono,
-    marginTop: 2,
-    opacity: 0.75,
-  },
+  sub: { fontSize: 10, fontFamily: MF.mono, marginTop: 2, opacity: 0.75 },
   subOffline: { color: '#fca5a5' },
   subOnline:  { color: '#86efac' },
 
@@ -165,12 +187,17 @@ const styles = StyleSheet.create({
   },
   pillOffline: { backgroundColor: '#450a0a' },
   pillOnline:  { backgroundColor: '#052e16' },
-  pillText: {
-    fontSize: 9,
-    fontWeight: '800',
-    fontFamily: MF.mono,
-    letterSpacing: 0.7,
-  },
+  pillText: { fontSize: 9, fontWeight: '800', fontFamily: MF.mono, letterSpacing: 0.7 },
   pillTextOffline: { color: '#fca5a5' },
   pillTextOnline:  { color: '#86efac' },
+
+  closeBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: 999,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  closeBtnOffline: { backgroundColor: '#450a0a' },
 });
