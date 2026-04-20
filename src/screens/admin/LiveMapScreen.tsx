@@ -23,7 +23,7 @@ import { useLocationStore }    from '../../store/locationStore';
 import { LiveEmployee }        from '../../types';
 import EmployeeMarker          from '../../components/map/EmployeeMarker';
 import EmployeeListPanel       from '../../components/map/EmployeeListPanel';
-
+import { MC } from '../../navigation/AppTheme';
 // ── Palette ───────────────────────────────────────────────────────
 const C = {
   tealDark:   '#085041',
@@ -276,17 +276,7 @@ export default function LiveMapScreen() {
   // every other admin screen keeps its normal opaque status bar.
   // ── STATUS BAR: translucent ONLY on this screen ───────────────
 // ── STATUS BAR: translucent ONLY on this screen ───────────────
-useFocusEffect(
-  useCallback(() => {
-    StatusBar.setBarStyle('dark-content', true);
-    if (Platform.OS === 'android') {
-      StatusBar.setBackgroundColor('transparent', true);
-      StatusBar.setTranslucent(true);
-    }
-    // ← NO cleanup/return here — other screens declare their own on focus
-  }, []),
-);
-
+  
   const mapRef = useRef<MapView>(null);
   const [showList,         setShowList]         = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<LiveEmployee | null>(null);
@@ -343,9 +333,9 @@ useFocusEffect(
   const topOffset       = insets.top + 12;
 
   return (
-    // No <StatusBar> JSX here — the useFocusEffect hook above handles it imperatively
+    
     <View style={s.container}>
-
+<StatusBar barStyle="light-content" backgroundColor={MC.bg} />
       {/* Map fills entire screen including behind status bar */}
       <MapView
         ref={mapRef}

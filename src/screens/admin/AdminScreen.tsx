@@ -886,13 +886,6 @@ const hasFetchedOnce = useRef(false);
 
 useFocusEffect(
   useCallback(() => {
-    // ── Status bar for all dark admin screens ─────────────────
-    StatusBar.setBarStyle('light-content', true);
-    if (Platform.OS === 'android') {
-      StatusBar.setBackgroundColor('#080C14', true);
-      StatusBar.setTranslucent(false);
-    }
-
     // ── Data ──────────────────────────────────────────────────
     attach();
     seedEmployees();
