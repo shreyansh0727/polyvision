@@ -8,6 +8,7 @@ on:
       - 'index.js'
       - 'package.json'
       - 'assets/**'
+      - 'App.tsx'
 
 concurrency:
   group: ota-${{ github.ref }}
