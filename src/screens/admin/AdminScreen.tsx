@@ -26,7 +26,6 @@ import LoadingOverlay from '../../components/shared/LoadingOverlay';
 
 import { apiGet }                   from '../../services/api';
 import { LiveEmployee, VisitPhoto } from '../../types';
-import { MC } from '../../navigation/AppTheme';
 
 const VISITS_PAGE_SIZE = 20;
 
@@ -930,7 +929,7 @@ useFocusEffect(
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="light-content" backgroundColor={MC.bg} />
+      <StatusBar barStyle="light-content" backgroundColor="#080C14" />
 
       <LoadingOverlay
         visible={loading && visits.length === 0 && employees.length === 0}
