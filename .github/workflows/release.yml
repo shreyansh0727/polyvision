@@ -62,6 +62,27 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
+      - name: Set Android versionName and versionCode from tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"              # e.g. v1.4.2
+          VERSION_NAME="${TAG#v}"               # 1.4.2
+
+          # Simple versionCode: strip dots -> 10402, or use run number
+          VERSION_CODE="${GITHUB_RUN_NUMBER}"
+
+          echo "Using versionName=${VERSION_NAME}, versionCode=${VERSION_CODE}"
+
+          GRADLE_FILE="android/app/build.gradle"
+
+          # Replace versionName "..." with versionName "1.4.2"
+          sed -i "s/versionName \"[^\"]*\"/versionName \"${VERSION_NAME}\"/g" "$GRADLE_FILE"
+
+          # Replace versionCode N with versionCode <run number>
+          sed -i "s/versionCode [0-9]\\+/versionCode ${VERSION_CODE}/g" "$GRADLE_FILE"
+
+          echo "Updated version lines in $GRADLE_FILE:"
+          grep -E "version(Name|Code)" "$GRADLE_FILE"
+
       - name: Build signed APK
         env:
           KEYSTORE_PATH: release.keystore
