@@ -41,7 +41,7 @@ jobs:
 
       - name: Embed OTA version into config
         run: |
-          sed -i "s|OTA_VERSION:.*|OTA_VERSION: '${{ steps.version.outputs.VERSION }}',|g" src/config.ts || true
+          sed -i "s|OTA_VERSION:.*|OTA_VERSION: '${{ steps.version.outputs.VERSION }}',|g" src/Config.ts || true
 
       - name: Build Android JS bundle
         run: |
