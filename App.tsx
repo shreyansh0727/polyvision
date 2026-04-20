@@ -1,11 +1,11 @@
 // App.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   StyleSheet, View, StatusBar, Text, TouchableOpacity,
-  Modal, Pressable,
+  Modal, Pressable, Animated, ScrollView,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getAuth, onAuthStateChanged } from '@react-native-firebase/auth';
 import { useAuthStore } from './src/store/authStore';
 import Navigation from './src/navigation';
@@ -14,8 +14,160 @@ import { useNetworkMonitor } from './src/hooks/useNetworkMonitor';
 import { OfflineBanner } from './src/components/OfflineBanner';
 import { useInternalAppUpdate } from './src/hooks/useInternalAppUpdate';
 import { MC, MF } from './src/navigation/AppTheme';
-import { ArrowRightCircle, X, Download, Sparkles } from 'lucide-react-native';
+import { ArrowDownToLine, X, Layers } from 'lucide-react-native';
 
+// ─── Bottom-sheet update popup ───────────────────────────────────────────────
+function UpdateSheet({
+  visible,
+  update,
+  onDownload,
+  onDismiss,
+}: {
+  visible: boolean;
+  update: NonNullable<ReturnType<typeof useInternalAppUpdate>['update']>;
+  onDownload: () => void;
+  onDismiss: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const slideY = useRef(new Animated.Value(400)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.spring(slideY, {
+        toValue: 0,
+        useNativeDriver: true,
+        damping: 22,
+        stiffness: 180,
+      }).start();
+    } else {
+      slideY.setValue(400);
+    }
+  }, [visible]);
+
+  const dismiss = () => {
+    Animated.timing(slideY, {
+      toValue: 400,
+      duration: 220,
+      useNativeDriver: true,
+    }).start(onDismiss);
+  };
+
+  // Parse notes into bullet array (split on newline or "; ")
+  const noteLines: string[] = update.notes
+    ? update.notes.split(/\n|;\s*/).filter(Boolean)
+    : [];
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={dismiss}
+    >
+      <Pressable style={styles.sheetBackdrop} onPress={dismiss}>
+        <Animated.View
+          style={[
+            styles.sheet,
+            { paddingBottom: insets.bottom + 12, transform: [{ translateY: slideY }] },
+          ]}
+        >
+          {/* Prevent backdrop tap from passing through */}
+          <Pressable onPress={() => {}}>
+
+            {/* Handle */}
+            <View style={styles.sheetHandle} />
+
+            {/* Header row */}
+            <View style={styles.sheetHeader}>
+              <View style={styles.sheetIconWrap}>
+                <Layers size={20} color={MC.blue} />
+              </View>
+              <View style={styles.sheetTitles}>
+                <Text style={styles.sheetTitle}>New build available</Text>
+                <Text style={styles.sheetSub}>
+                  
+                    ? `v-this → v${update.latestVersion}`
+                    : `v${update.latestVersion}`
+                </Text>
+              </View>
+              <TouchableOpacity style={styles.sheetCloseBtn} onPress={dismiss} hitSlop={8}>
+                <X size={13} color={MC.textSub} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Release notes */}
+            {noteLines.length > 0 && (
+              <View style={styles.notesBox}>
+                <Text style={styles.notesLabel}>What's new</Text>
+                <ScrollView
+                  style={{ maxHeight: 120 }}
+                  showsVerticalScrollIndicator={false}
+                  nestedScrollEnabled
+                >
+                  {noteLines.map((line, i) => (
+                    <View key={i} style={styles.noteRow}>
+                      <View style={styles.noteDot} />
+                      <Text style={styles.noteText}>{line.trim()}</Text>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+
+            {/* CTA buttons */}
+            <TouchableOpacity
+              style={styles.downloadBtn}
+              onPress={() => { dismiss(); onDownload(); }}
+              activeOpacity={0.88}
+            >
+              <ArrowDownToLine size={15} color={MC.bg} />
+              <Text style={styles.downloadBtnText}>Download APK</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.laterBtn} onPress={dismiss} activeOpacity={0.6}>
+              <Text style={styles.laterBtnText}>Remind me later</Text>
+            </TouchableOpacity>
+
+          </Pressable>
+        </Animated.View>
+      </Pressable>
+    </Modal>
+  );
+}
+
+// ─── Slim persistent banner ───────────────────────────────────────────────────
+function UpdateBanner({
+  update,
+  onDownload,
+  onDismiss,
+}: {
+  update: NonNullable<ReturnType<typeof useInternalAppUpdate>['update']>;
+  onDownload: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <View style={styles.banner}>
+      <View style={styles.bannerIconWrap}>
+        <ArrowDownToLine size={13} color={MC.bg} />
+      </View>
+      <View style={styles.bannerTextWrap}>
+        <Text style={styles.bannerTag}>New build</Text>
+        <Text style={styles.bannerVersion} numberOfLines={1}>
+          {update.latestVersion ? `v${update.latestVersion} available` : 'Update available'}
+        </Text>
+      </View>
+      <TouchableOpacity style={styles.bannerBtn} onPress={onDownload} activeOpacity={0.85}>
+        <Text style={styles.bannerBtnText}>Update</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.bannerDismiss} onPress={onDismiss} hitSlop={8}>
+        <X size={12} color={`${MC.bg}99`} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+// ─── Root ─────────────────────────────────────────────────────────────────────
 export default function App() {
   useNetworkMonitor();
   useOtaUpdate();
@@ -24,6 +176,7 @@ export default function App() {
 
   const [firebaseReady, setFirebaseReady] = useState(false);
   const [popupDismissed, setPopupDismissed] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(getAuth(), async () => {
@@ -32,22 +185,22 @@ export default function App() {
       await useAuthStore.getState().loadStoredAuth();
       setFirebaseReady(true);
     });
-
     return () => unsub();
   }, []);
 
-  // Reset dismissed state if a new update comes in
+  // Re-show popup whenever a new version is detected
   useEffect(() => {
     if (appUpdate?.latestVersion) {
       setPopupDismissed(false);
+      setBannerDismissed(false);
     }
   }, [appUpdate?.latestVersion]);
 
   if (!firebaseReady) return null;
 
-  const showUpdate = appUpdate?.needsUpdate && !appUpdate.force;
-  const showPopup = showUpdate && !popupDismissed;
-  const showBanner = showUpdate && popupDismissed;
+  const showUpdate = !!appUpdate?.needsUpdate && !appUpdate.force;
+  const showPopup  = showUpdate && !popupDismissed;
+  const showBanner = showUpdate && popupDismissed && !bannerDismissed;
 
   return (
     <GestureHandlerRootView style={styles.root}>
@@ -55,96 +208,29 @@ export default function App() {
         <View style={styles.root}>
           <StatusBar barStyle="light-content" backgroundColor="#020617" />
 
-          {/* ── Slim banner (after popup is dismissed) ── */}
+          {/* Slim banner — shown after popup is dismissed */}
           {showBanner && (
-            <View style={styles.updateBanner}>
-              <View style={styles.updateTextWrap}>
-                <Text style={styles.updateTitle}>
-                  New build available{appUpdate.latestVersion ? ` v${appUpdate.latestVersion}` : ''}
-                </Text>
-                <Text style={styles.updateSub} numberOfLines={1}>
-                  {appUpdate.notes || 'Tap update to download the latest APK.'}
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={styles.updateBtn}
-                onPress={openDownload}
-                activeOpacity={0.85}
-              >
-                <ArrowRightCircle size={14} color={MC.bg} />
-                <Text style={styles.updateBtnText}>Update</Text>
-              </TouchableOpacity>
-            </View>
+            <UpdateBanner
+              update={appUpdate}
+              onDownload={openDownload}
+              onDismiss={() => setBannerDismissed(true)}
+            />
           )}
 
-          {/* ── Update popup modal ── */}
-          <Modal
-            visible={showPopup}
-            transparent
-            animationType="fade"
-            statusBarTranslucent
-            onRequestClose={() => setPopupDismissed(true)}
-          >
-            <Pressable
-              style={styles.modalBackdrop}
-              onPress={() => setPopupDismissed(true)}
-            >
-              {/* Prevent tap-through on card */}
-              <Pressable style={styles.modalCard} onPress={() => {}}>
+          <OfflineBanner />
+          <Navigation />
 
-                {/* Close button */}
-                <TouchableOpacity
-                  style={styles.closeBtn}
-                  onPress={() => setPopupDismissed(true)}
-                  hitSlop={8}
-                >
-                  <X size={16} color={MC.textSub} />
-                </TouchableOpacity>
+          {/* Bottom-sheet popup — shown on first detection */}
+          {showUpdate && (
+            <UpdateSheet
+              visible={showPopup}
+              update={appUpdate}
+              onDownload={openDownload}
+              onDismiss={() => setPopupDismissed(true)}
+            />
+          )}
 
-                {/* Icon badge */}
-                <View style={styles.iconBadge}>
-                  <Sparkles size={22} color={MC.blue} />
-                </View>
-
-                <Text style={styles.popupTitle}>New Build Available</Text>
-
-                {appUpdate?.latestVersion && (
-                  <View style={styles.versionBadge}>
-                    <Text style={styles.versionBadgeText}>
-                      v{appUpdate.latestVersion}
-                    </Text>
-                  </View>
-                )}
-
-                {appUpdate?.notes && (
-                  <Text style={styles.popupNotes}>{appUpdate.notes}</Text>
-                )}
-
-                <TouchableOpacity
-                  style={styles.downloadBtn}
-                  onPress={() => {
-                    setPopupDismissed(true);
-                    openDownload();
-                  }}
-                  activeOpacity={0.88}
-                >
-                  <Download size={15} color={MC.bg} />
-                  <Text style={styles.downloadBtnText}>Download Update</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.laterBtn}
-                  onPress={() => setPopupDismissed(true)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.laterBtnText}>Maybe later</Text>
-                </TouchableOpacity>
-
-              </Pressable>
-            </Pressable>
-          </Modal>
-
-          {/* ── Force-update blocking overlay ── */}
+          {/* Force-update blocking overlay */}
           {appUpdate?.force && (
             <View style={styles.forceOverlay}>
               <View style={styles.forceCard}>
@@ -152,19 +238,12 @@ export default function App() {
                 <Text style={styles.forceSub}>
                   Please install the latest build to continue using the app.
                 </Text>
-                <TouchableOpacity
-                  style={styles.forceBtn}
-                  onPress={openDownload}
-                  activeOpacity={0.9}
-                >
+                <TouchableOpacity style={styles.forceBtn} onPress={openDownload} activeOpacity={0.9}>
                   <Text style={styles.forceBtnText}>Download update</Text>
                 </TouchableOpacity>
               </View>
             </View>
           )}
-
-          <OfflineBanner />
-          <Navigation />
         </View>
       </SafeAreaProvider>
     </GestureHandlerRootView>
@@ -174,119 +253,116 @@ export default function App() {
 const styles = StyleSheet.create({
   root: { flex: 1 },
 
-  // ── Slim banner ──────────────────────────────────────────
-  updateBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: MC.blue,
-  },
-  updateTextWrap: { flex: 1, marginRight: 12 },
-  updateTitle: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: MC.bg,
-    fontFamily: MF.mono,
-    letterSpacing: 0.5,
-  },
-  updateSub: {
-    fontSize: 10,
-    color: MC.bg,
-    opacity: 0.85,
-    marginTop: 1,
-    fontFamily: MF.mono,
-  },
-  updateBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: MC.surface,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-  },
-  updateBtnText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: MC.blue,
-    fontFamily: MF.mono,
-  },
-
-  // ── Popup modal ──────────────────────────────────────────
-  modalBackdrop: {
+  // ── Bottom sheet ────────────────────────────────────────
+  sheetBackdrop: {
     flex: 1,
-    backgroundColor: '#000000b0',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 28,
+    backgroundColor: '#000000b8',
+    justifyContent: 'flex-end',
   },
-  modalCard: {
-    width: '100%',
+  sheet: {
     backgroundColor: MC.surface,
-    borderRadius: 20,
-    padding: 24,
-    paddingTop: 28,
-    borderWidth: 1,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderWidth: 0.5,
+    borderBottomWidth: 0,
     borderColor: MC.border,
-    alignItems: 'center',
+    paddingHorizontal: 20,
   },
-  closeBtn: {
-    position: 'absolute',
-    top: 14,
-    right: 14,
-    padding: 4,
+  sheetHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: MC.border,
+    alignSelf: 'center',
+    marginTop: 12,
+    marginBottom: 18,
   },
-  iconBadge: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-    backgroundColor: `${MC.blue}22`,
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 16,
+  },
+  sheetIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: `${MC.blue}18`,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 14,
+    flexShrink: 0,
   },
-  popupTitle: {
-    fontSize: 17,
+  sheetTitles: { flex: 1 },
+  sheetTitle: {
+    fontSize: 15,
     fontWeight: '800',
     color: MC.textPrimary,
     fontFamily: MF.display,
-    marginBottom: 8,
-    textAlign: 'center',
   },
-  versionBadge: {
-    backgroundColor: `${MC.blue}22`,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 3,
-    marginBottom: 12,
-  },
-  versionBadgeText: {
+  sheetSub: {
     fontSize: 11,
-    fontWeight: '700',
-    color: MC.blue,
-    fontFamily: MF.mono,
-    letterSpacing: 0.6,
-  },
-  popupNotes: {
-    fontSize: 12,
     color: MC.textSub,
     fontFamily: MF.mono,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: 20,
+    marginTop: 3,
   },
+  sheetCloseBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 999,
+    backgroundColor: MC.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+
+  notesBox: {
+    backgroundColor: `${MC.bg}66`,
+    borderRadius: 10,
+    borderWidth: 0.5,
+    borderColor: MC.border,
+    padding: 12,
+    marginBottom: 16,
+  },
+  notesLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: MC.textSub,
+    fontFamily: MF.mono,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+  },
+  noteRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginBottom: 6,
+  },
+  noteDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: MC.blue,
+    marginTop: 5,
+    flexShrink: 0,
+  },
+  noteText: {
+    flex: 1,
+    fontSize: 11,
+    color: MC.textSub,
+    fontFamily: MF.mono,
+    lineHeight: 17,
+  },
+
   downloadBtn: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
     backgroundColor: MC.blue,
     borderRadius: 14,
-    paddingVertical: 13,
-    paddingHorizontal: 28,
-    width: '100%',
-    justifyContent: 'center',
-    marginBottom: 10,
+    paddingVertical: 14,
+    marginBottom: 8,
   },
   downloadBtnText: {
     fontSize: 13,
@@ -294,14 +370,56 @@ const styles = StyleSheet.create({
     color: MC.bg,
     fontFamily: MF.mono,
   },
-  laterBtn: {
+  laterBtn: { alignItems: 'center', paddingVertical: 10 },
+  laterBtnText: { fontSize: 12, color: MC.textSub, fontFamily: MF.mono },
+
+  // ── Slim banner ──────────────────────────────────────────
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
     paddingVertical: 8,
+    backgroundColor: MC.blue,
   },
-  laterBtnText: {
-    fontSize: 12,
-    color: MC.textSub,
+  bannerIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  bannerTextWrap: { flex: 1 },
+  bannerTag: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: `${MC.bg}aa`,
+    fontFamily: MF.mono,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  bannerVersion: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: MC.bg,
+    fontFamily: MF.mono,
+    marginTop: 1,
+  },
+  bannerBtn: {
+    backgroundColor: MC.surface,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+  },
+  bannerBtnText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: MC.blue,
     fontFamily: MF.mono,
   },
+  bannerDismiss: { padding: 4 },
 
   // ── Force overlay ────────────────────────────────────────
   forceOverlay: {
