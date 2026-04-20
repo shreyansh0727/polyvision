@@ -92,7 +92,7 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       - name: Update backend app version metadata
         env:
-          OTA_APP_VERSION_URL: ${{ secrets.OTA_APP_VERSION_URL }} # e.g. https://api.yourdomain.com/ota/app/version
+          OTA_APP_VERSION_URL: ${{ secrets.OTA_APP_VERSION_URL }} 
           OTA_SECRET:          ${{ secrets.OTA_SECRET }}
         run: |
           TAG="${GITHUB_REF_NAME}"              # e.g. v1.3.0
@@ -103,7 +103,7 @@ jobs:
           echo "APK URL: ${APK_URL}"
 
           # Optional: set a min supported version (or leave null)
-          MIN_SUPPORTED_VERSION=""
+          MIN_SUPPORTED_VERSION="null"
           NOTES="Internal release ${VERSION} (tag ${TAG})"
 
           # Build JSON payload
