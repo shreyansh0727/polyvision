@@ -11,11 +11,21 @@ import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.facebook.react.defaults.DefaultReactNativeHost
 import com.facebook.react.soloader.OpenSourceMergedSoMapping
 import com.facebook.soloader.SoLoader
+import java.io.File
 
 class MainApplication : Application(), ReactApplication {
 
   override val reactNativeHost: ReactNativeHost =
       object : DefaultReactNativeHost(this) {
+
+        // ── OTA: load downloaded bundle if available ──────────────────────
+        override fun getJSBundleFile(): String? {
+          val otaBundle = File(applicationContext.filesDir, "ota/index.android.bundle")
+          return if (otaBundle.exists()) otaBundle.absolutePath else null
+          // returning null → RN falls back to the bundled APK asset automatically
+        }
+        // ──────────────────────────────────────────────────────────────────
+
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
               // Packages that cannot be autolinked yet can be added manually here, for example:
@@ -37,7 +47,6 @@ class MainApplication : Application(), ReactApplication {
     super.onCreate()
     SoLoader.init(this, OpenSourceMergedSoMapping)
     if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
-      // If you opted-in for the New Architecture, we load the native entry point for this app.
       load()
     }
   }
