@@ -1,14 +1,16 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useOfflineStore } from '../store/offlineStore';
 import { WifiOff, Wifi, RefreshCw } from 'lucide-react-native';
-import { MC, MF } from '../navigation/AppTheme';
+import { MF } from '../navigation/AppTheme';
 
 export function OfflineBanner(): React.ReactElement | null {
   const isOnline = useOfflineStore(s => s.isOnline);
   const queue    = useOfflineStore(s => s.queue);
+  const insets   = useSafeAreaInsets();
 
-  const slideAnim  = useRef(new Animated.Value(-60)).current;
+  const slideAnim  = useRef(new Animated.Value(80)).current; // starts below screen
   const dotOpacity = useRef(new Animated.Value(1)).current;
   const wasOnline  = useRef(true);
 
@@ -16,8 +18,8 @@ export function OfflineBanner(): React.ReactElement | null {
   useEffect(() => {
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(dotOpacity, { toValue: 0.3, duration: 700, useNativeDriver: true }),
-        Animated.timing(dotOpacity, { toValue: 1,   duration: 700, useNativeDriver: true }),
+        Animated.timing(dotOpacity, { toValue: 0.25, duration: 700, useNativeDriver: true }),
+        Animated.timing(dotOpacity, { toValue: 1,    duration: 700, useNativeDriver: true }),
       ])
     );
     loop.start();
@@ -27,7 +29,6 @@ export function OfflineBanner(): React.ReactElement | null {
   useEffect(() => {
     if (!isOnline) {
       wasOnline.current = false;
-      // Slide in
       Animated.spring(slideAnim, {
         toValue: 0,
         useNativeDriver: true,
@@ -36,11 +37,10 @@ export function OfflineBanner(): React.ReactElement | null {
       }).start();
     } else {
       if (!wasOnline.current) {
-        // Show "back online" briefly, then slide out
         Animated.sequence([
           Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, damping: 20, stiffness: 200 }),
           Animated.delay(2200),
-          Animated.spring(slideAnim, { toValue: -60, useNativeDriver: true, damping: 22, stiffness: 180 }),
+          Animated.spring(slideAnim, { toValue: 80, useNativeDriver: true, damping: 22, stiffness: 180 }),
         ]).start();
         wasOnline.current = true;
       }
@@ -54,10 +54,14 @@ export function OfflineBanner(): React.ReactElement | null {
       style={[
         styles.banner,
         isOnline ? styles.online : styles.offline,
-        { transform: [{ translateY: slideAnim }] },
+        {
+          // Sit just above the home indicator / nav bar
+          bottom: insets.bottom + 12,
+          transform: [{ translateY: slideAnim }],
+        },
       ]}
     >
-      {/* Pulsing status dot */}
+      {/* Pulsing dot */}
       <Animated.View
         style={[
           styles.dot,
@@ -82,19 +86,17 @@ export function OfflineBanner(): React.ReactElement | null {
         </Text>
       </View>
 
-      {/* Icon + badge pill */}
+      {/* Badge pill */}
       <View style={[styles.pill, isOnline ? styles.pillOnline : styles.pillOffline]}>
         {isOnline ? (
           queueCount > 0
-            ? <RefreshCw size={11} color={isOnline ? '#4ade80' : '#f87171'} style={styles.pillIcon} />
-            : <Wifi size={11} color="#4ade80" style={styles.pillIcon} />
+            ? <RefreshCw size={11} color="#4ade80" />
+            : <Wifi size={11} color="#4ade80" />
         ) : (
-          <WifiOff size={11} color="#f87171" style={styles.pillIcon} />
+          <WifiOff size={11} color="#f87171" />
         )}
         <Text style={[styles.pillText, isOnline ? styles.pillTextOnline : styles.pillTextOffline]}>
-          {isOnline
-            ? queueCount > 0 ? `${queueCount} queued` : 'Live'
-            : 'Offline'}
+          {isOnline ? (queueCount > 0 ? `${queueCount} queued` : 'Live') : 'Offline'}
         </Text>
       </View>
     </Animated.View>
@@ -104,30 +106,27 @@ export function OfflineBanner(): React.ReactElement | null {
 const styles = StyleSheet.create({
   banner: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
+    left: 16,
+    right: 16,
     zIndex: 9999,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 9,
+    paddingVertical: 10,
     paddingHorizontal: 14,
     gap: 10,
+    borderRadius: 14,           // pill-card shape, floats above nav
+    borderWidth: 0.5,
   },
 
-  // ── State backgrounds ───────────────────────────────────
   offline: {
     backgroundColor: '#7f1d1d',
-    borderBottomWidth: 0.5,
-    borderBottomColor: '#991b1b',
+    borderColor: '#991b1b',
   },
   online: {
     backgroundColor: '#14532d',
-    borderBottomWidth: 0.5,
-    borderBottomColor: '#166534',
+    borderColor: '#166534',
   },
 
-  // ── Pulsing dot ─────────────────────────────────────────
   dot: {
     width: 7,
     height: 7,
@@ -137,7 +136,6 @@ const styles = StyleSheet.create({
   dotOffline: { backgroundColor: '#f87171' },
   dotOnline:  { backgroundColor: '#4ade80' },
 
-  // ── Text block ──────────────────────────────────────────
   textBlock: { flex: 1 },
   title: {
     fontSize: 11,
@@ -156,7 +154,6 @@ const styles = StyleSheet.create({
   subOffline: { color: '#fca5a5' },
   subOnline:  { color: '#86efac' },
 
-  // ── Badge pill ──────────────────────────────────────────
   pill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -168,7 +165,6 @@ const styles = StyleSheet.create({
   },
   pillOffline: { backgroundColor: '#450a0a' },
   pillOnline:  { backgroundColor: '#052e16' },
-  pillIcon: {},
   pillText: {
     fontSize: 9,
     fontWeight: '800',
