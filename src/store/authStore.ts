@@ -11,31 +11,48 @@ import {
 import { apiGet, apiPost, setLogoutHandler, clearTokenCache } from '../services/api';
 import { Employee } from '../types';
 
-interface AuthStore {
-  employee:        Employee | null;
-  isAuthenticated: boolean;
-  loading:         boolean;
-  error:           string | null;
-  login:           (email: string, password: string) => Promise<void>;
-  logout:          () => Promise<void>;
-  changePassword:  (newPassword: string) => Promise<void>;
-  loadStoredAuth:  () => Promise<void>;
-  initAuthListener: () => () => void;
-  clearError:      () => void;
+import type { PlanStatus } from '../types';
+
+export interface AuthEmployee extends Employee {
+  tenant_id?: string;
+  company_name?: string;
+  plan?: PlanStatus;
+  payment_ref?: string | null;
+  activated_at?: string | null;
+  tenant_created_at?: string | null;
 }
 
-const STORAGE_KEY = 'auth.employee.v1';
+interface AuthStore {
+  employee: AuthEmployee | null;
+  isAuthenticated: boolean;
+  loading: boolean;
+  error: string | null;
+
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+  changePassword: (newPassword: string) => Promise<void>;
+  loadStoredAuth: () => Promise<void>;
+  initAuthListener: () => () => void;
+  refreshMe: () => Promise<AuthEmployee | null>;
+  clearError: () => void;
+
+  needsTenantSetup: () => boolean;
+  needsPayment: () => boolean;
+  isAdmin: () => boolean;
+}
+
+const STORAGE_KEY = 'auth.employee.v2';
 
 function resetState() {
   return {
-    employee:        null as Employee | null,
+    employee: null as AuthEmployee | null,
     isAuthenticated: false,
-    loading:         false,
-    error:           null as string | null,
+    loading: false,
+    error: null as string | null,
   };
 }
 
-async function persistEmployee(employee: Employee | null) {
+async function persistEmployee(employee: AuthEmployee | null) {
   try {
     if (employee) {
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(employee));
@@ -47,11 +64,11 @@ async function persistEmployee(employee: Employee | null) {
   }
 }
 
-async function readStoredEmployee(): Promise<Employee | null> {
+async function readStoredEmployee(): Promise<AuthEmployee | null> {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as Employee;
+    return JSON.parse(raw) as AuthEmployee;
   } catch (e) {
     console.warn('[Auth] Failed to read stored employee:', e);
     return null;
@@ -62,6 +79,35 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   ...resetState(),
 
   clearError: () => set({ error: null }),
+
+  isAdmin: () => get().employee?.role === 'admin',
+
+  needsTenantSetup: () => {
+    const employee = get().employee;
+    return !!employee && employee.role === 'admin' && !employee.tenant_id;
+  },
+
+  needsPayment: () => {
+    const employee = get().employee;
+    return !!employee &&
+      employee.role === 'admin' &&
+      !!employee.tenant_id &&
+      employee.plan !== 'active';
+  },
+
+  refreshMe: async () => {
+    const firebaseUser = getAuth().currentUser;
+    if (!firebaseUser) {
+      set(resetState());
+      await persistEmployee(null);
+      return null;
+    }
+
+    const employee = await apiGet('/auth/me') as AuthEmployee;
+    set({ employee, isAuthenticated: true, error: null });
+    await persistEmployee(employee);
+    return employee;
+  },
 
   initAuthListener: () => {
     setLogoutHandler(async () => {
@@ -85,7 +131,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     try {
       const firebaseUser = getAuth().currentUser;
       if (!firebaseUser) {
-        // No Firebase user; maybe we only have cached employee (for UI hints)
         const cached = await readStoredEmployee();
         if (cached) {
           set({ employee: cached, isAuthenticated: false });
@@ -96,7 +141,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       }
 
       try {
-        const employee = await apiGet('/auth/me') as Employee;
+        const employee = await apiGet('/auth/me') as AuthEmployee;
 
         const currentUser = getAuth().currentUser;
         if (!currentUser || currentUser.uid !== firebaseUser.uid) {
@@ -109,10 +154,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         await persistEmployee(employee);
       } catch (e: any) {
         const netState = await NetInfo.fetch();
-        const offline = netState.isConnected === false || netState.isInternetReachable === false;
+        const offline =
+          netState.isConnected === false ||
+          netState.isInternetReachable === false;
 
         if (offline) {
-          // Offline: fall back to cached employee if any
           const cached = await readStoredEmployee();
           if (cached) {
             set({ employee: cached, isAuthenticated: true });
@@ -122,7 +168,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
           return;
         }
 
-        // Online but /auth/me failed → real auth error; clear everything
         clearTokenCache();
         set(resetState());
         await persistEmployee(null);
@@ -138,7 +183,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     try {
       clearTokenCache();
       await signInWithEmailAndPassword(getAuth(), email, password);
-      const employee = await apiGet('/auth/me') as Employee;
+
+      const employee = await apiGet('/auth/me') as AuthEmployee;
       set({ employee, isAuthenticated: true, error: null });
       await persistEmployee(employee);
     } catch (e: any) {
@@ -184,13 +230,13 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
 function mapFirebaseError(code?: string): string | null {
   switch (code) {
-    case 'auth/invalid-email':          return 'Invalid email address.';
-    case 'auth/user-not-found':         return 'No account found for this email.';
-    case 'auth/wrong-password':         return 'Incorrect password.';
-    case 'auth/invalid-credential':     return 'Incorrect email or password.';
-    case 'auth/user-disabled':          return 'This account has been disabled.';
-    case 'auth/too-many-requests':      return 'Too many attempts. Try again later.';
+    case 'auth/invalid-email': return 'Invalid email address.';
+    case 'auth/user-not-found': return 'No account found for this email.';
+    case 'auth/wrong-password': return 'Incorrect password.';
+    case 'auth/invalid-credential': return 'Incorrect email or password.';
+    case 'auth/user-disabled': return 'This account has been disabled.';
+    case 'auth/too-many-requests': return 'Too many attempts. Try again later.';
     case 'auth/network-request-failed': return 'Network error. Check your connection.';
-    default:                            return null;
+    default: return null;
   }
 }
