@@ -19,9 +19,9 @@ let watchId: number | null = null;
 let bgInterval: ReturnType<typeof setInterval> | null = null;
 let isTracking = false;
 
-// ── Battery throttle ──────────────────────────────────────────────
 let _lastBattery = 0;
 let _lastBatteryAt = 0;
+
 async function getBattery(): Promise<number> {
   if (Date.now() - _lastBatteryAt > 60_000) {
     _lastBattery = Math.round((await DeviceInfo.getBatteryLevel()) * 100);
@@ -30,7 +30,6 @@ async function getBattery(): Promise<number> {
   return _lastBattery;
 }
 
-// ── Permission Request ────────────────────────────────────────────
 export async function requestLocationPermissions(): Promise<boolean> {
   if (Platform.OS === 'ios') return true;
 
@@ -71,7 +70,6 @@ export async function requestLocationPermissions(): Promise<boolean> {
   return true;
 }
 
-// ── Write to backend (with offline queue fallback) ───────────────
 async function writeLocationToBackend(
   payload: { lat: number; lng: number; accuracy?: number | null; battery?: number | null },
 ): Promise<void> {
@@ -109,16 +107,17 @@ async function writeLocationToBackend(
   }
 }
 
-// ── Write to Firebase RTDB + backend ─────────────────────────────
 async function writeLocation(
+  tenantId: string,
   employeeId: string,
   payload: { lat: number; lng: number; accuracy?: number | null; battery?: number | null },
 ): Promise<void> {
   const recorded_at = new Date().toISOString();
 
   try {
-    const locRef = ref(getDatabase(), `live_locations/${employeeId}`);
+    const locRef = ref(getDatabase(), `tenants/${tenantId}/locations/${employeeId}`);
     await update(locRef, {
+      employee_id: employeeId,
       lat: payload.lat,
       lng: payload.lng,
       accuracy: payload.accuracy ?? null,
@@ -128,16 +127,17 @@ async function writeLocation(
     });
   } catch (e) {
     console.warn('[RTDB] writeLocation failed:', e);
+    throw e;
   }
 
   await writeLocationToBackend(payload);
 }
 
-// ── Background Task ───────────────────────────────────────────────
 const backgroundTask = async (taskData: any): Promise<void> => {
-  const { employeeId } = taskData ?? {};
-  if (!employeeId) {
-    console.error('[BG] Missing employeeId in taskData');
+  const { tenantId, employeeId } = taskData ?? {};
+
+  if (!tenantId || !employeeId) {
+    console.error('[BG] Missing tenantId or employeeId in taskData');
     return;
   }
 
@@ -145,7 +145,7 @@ const backgroundTask = async (taskData: any): Promise<void> => {
     bgInterval = setInterval(() => {
       Geolocation.getCurrentPosition(
         async (pos: GeolocationResponse) => {
-          await writeLocation(employeeId, {
+          await writeLocation(tenantId, employeeId, {
             lat: pos.coords.latitude,
             lng: pos.coords.longitude,
             accuracy: pos.coords.accuracy,
@@ -159,7 +159,6 @@ const backgroundTask = async (taskData: any): Promise<void> => {
   });
 };
 
-// ── Android foreground service config ────────────────────────────
 const backgroundOptions = {
   taskName: 'LocationTracking',
   taskTitle: 'Shift Tracking Active',
@@ -171,8 +170,7 @@ const backgroundOptions = {
   parameters: {} as any,
 };
 
-// ── Start Tracking ────────────────────────────────────────────────
-export async function startTracking(employeeId: string): Promise<void> {
+export async function startTracking(tenantId: string, employeeId: string): Promise<void> {
   if (isTracking) {
     console.warn('[Tracking] Already running — ignoring duplicate start');
     return;
@@ -182,13 +180,18 @@ export async function startTracking(employeeId: string): Promise<void> {
     const granted = await requestLocationPermissions();
     if (!granted) return;
 
-    const locRef = ref(getDatabase(), `live_locations/${employeeId}`);
+    const locRef = ref(getDatabase(), `tenants/${tenantId}/locations/${employeeId}`);
+
     await onDisconnect(locRef).update({ is_online: false });
-    await update(locRef, { is_online: true });
+
+    await update(locRef, {
+      employee_id: employeeId,
+      is_online: true,
+    });
 
     watchId = Geolocation.watchPosition(
       async (pos: GeolocationResponse) => {
-        await writeLocation(employeeId, {
+        await writeLocation(tenantId, employeeId, {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           accuracy: pos.coords.accuracy,
@@ -207,7 +210,7 @@ export async function startTracking(employeeId: string): Promise<void> {
     if (!BackgroundActions.isRunning()) {
       await BackgroundActions.start(backgroundTask, {
         ...backgroundOptions,
-        parameters: { employeeId },
+        parameters: { tenantId, employeeId },
       });
     }
 
@@ -215,18 +218,17 @@ export async function startTracking(employeeId: string): Promise<void> {
     console.log('[Tracking] Started ✅');
   } catch (e: any) {
     console.error('[Tracking] startTracking crashed:', e);
-    await stopTracking(employeeId);
+    await stopTracking(tenantId, employeeId);
     throw e;
   }
 }
 
-// ── Stop Tracking ─────────────────────────────────────────────────
-export async function stopTracking(employeeId?: string): Promise<void> {
+export async function stopTracking(tenantId?: string, employeeId?: string): Promise<void> {
   isTracking = false;
 
-  if (employeeId) {
+  if (tenantId && employeeId) {
     try {
-      const locRef = ref(getDatabase(), `live_locations/${employeeId}`);
+      const locRef = ref(getDatabase(), `tenants/${tenantId}/locations/${employeeId}`);
       await onDisconnect(locRef).cancel();
       await update(locRef, { is_online: false });
     } catch (e) {
