@@ -13,9 +13,13 @@ import {
 } from 'lucide-react-native';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { getAuth, sendPasswordResetEmail } from '@react-native-firebase/auth';
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useAuthStore } from '../../store/authStore';
 import { useOfflineStore } from '../../store/offlineStore';
 import { MC, MF } from '../../navigation/AppTheme';
+import { AuthStackParamList } from '../../navigation/AuthStack';
+
+type Props = NativeStackScreenProps<AuthStackParamList, 'Login'>;
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
@@ -28,9 +32,6 @@ function isValidEmail(e: string) {
 type FormErrors = { email?: string; password?: string };
 type Mode = 'login' | 'forgot' | 'forgot_sent';
 
-// ─────────────────────────────────────────────────────────────────
-// Staggered entry hook
-// ─────────────────────────────────────────────────────────────────
 function useStaggerIn(count: number, delay = 80) {
   const anims = useRef(
     Array.from({ length: count }, () => ({
@@ -44,37 +45,40 @@ function useStaggerIn(count: number, delay = 80) {
       anims.map(({ opacity, translateY }, i) =>
         Animated.parallel([
           Animated.timing(opacity, {
-            toValue: 1, duration: 500, delay: 120 + i * delay,
-            easing: Easing.out(Easing.cubic), useNativeDriver: true,
+            toValue: 1,
+            duration: 500,
+            delay: 120 + i * delay,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
           }),
           Animated.timing(translateY, {
-            toValue: 0, duration: 480, delay: 120 + i * delay,
-            easing: Easing.out(Easing.cubic), useNativeDriver: true,
+            toValue: 0,
+            duration: 480,
+            delay: 120 + i * delay,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
           }),
         ]),
       ),
     ).start();
-  }, []);
+  }, [anims, delay]);
 
   return anims;
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Inline input
-// ─────────────────────────────────────────────────────────────────
 const InlineInput = React.forwardRef<TextInputType, {
-  label:            string;
-  value:            string;
-  onChangeText:     (v: string) => void;
-  placeholder:      string;
-  error?:           string;
-  hint?:            string;
-  Icon:             typeof Mail;
-  secureEntry?:     boolean;
-  keyboardType?:    any;
-  autoCapitalize?:  any;
-  returnKeyType?:   any;
-  editable?:        boolean;
+  label: string;
+  value: string;
+  onChangeText: (v: string) => void;
+  placeholder: string;
+  error?: string;
+  hint?: string;
+  Icon: typeof Mail;
+  secureEntry?: boolean;
+  keyboardType?: any;
+  autoCapitalize?: any;
+  returnKeyType?: any;
+  editable?: boolean;
   onSubmitEditing?: () => void;
 }>(function InlineInput(
   {
@@ -93,6 +97,7 @@ const InlineInput = React.forwardRef<TextInputType, {
     setFocused(true);
     Animated.timing(focusAnim, { toValue: 1, duration: 200, useNativeDriver: false }).start();
   };
+
   const onBlur = () => {
     setFocused(false);
     Animated.timing(focusAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start();
@@ -133,9 +138,11 @@ const InlineInput = React.forwardRef<TextInputType, {
             onPress={() => setRevealed(r => !r)}
             hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
           >
-            {revealed
-              ? <EyeOff size={15} color={MC.textSub} strokeWidth={1.5} />
-              : <Eye    size={15} color={MC.textSub} strokeWidth={1.5} />}
+            {revealed ? (
+              <EyeOff size={15} color={MC.textSub} strokeWidth={1.5} />
+            ) : (
+              <Eye size={15} color={MC.textSub} strokeWidth={1.5} />
+            )}
           </TouchableOpacity>
         )}
       </Animated.View>
@@ -160,7 +167,7 @@ const inputStyles = StyleSheet.create({
     backgroundColor: MC.surfaceAlt, borderWidth: 1.5,
     borderRadius: 12, overflow: 'hidden',
   },
-  iconLeft:  { paddingLeft: 14, paddingRight: 4 },
+  iconLeft: { paddingLeft: 14, paddingRight: 4 },
   iconRight: { paddingRight: 14, paddingLeft: 4 },
   input: {
     flex: 1, paddingHorizontal: 10, paddingVertical: 14,
@@ -171,12 +178,9 @@ const inputStyles = StyleSheet.create({
     borderBottomRightRadius: 12, marginTop: -2,
   },
   error: { fontSize: 10, color: MC.rose, fontFamily: MF.mono, marginTop: 5, letterSpacing: 0.3 },
-  hint:  { fontSize: 10, color: MC.textFaint, fontFamily: MF.mono, marginTop: 5, letterSpacing: 0.3 },
+  hint: { fontSize: 10, color: MC.textFaint, fontFamily: MF.mono, marginTop: 5, letterSpacing: 0.3 },
 });
 
-// ─────────────────────────────────────────────────────────────────
-// CTA Button
-// ─────────────────────────────────────────────────────────────────
 function SignInButton({ onPress, loading, disabled }: {
   onPress: () => void; loading: boolean; disabled?: boolean;
 }) {
@@ -187,6 +191,7 @@ function SignInButton({ onPress, loading, disabled }: {
     ReactNativeHapticFeedback.trigger('impactLight', HAPTIC);
     Animated.spring(scaleAnim, { toValue: 0.96, useNativeDriver: true }).start();
   };
+
   const onPressOut = () => {
     if (disabled || loading) return;
     Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true }).start();
@@ -194,10 +199,21 @@ function SignInButton({ onPress, loading, disabled }: {
 
   return (
     <TouchableOpacity
-      onPress={onPress} onPressIn={onPressIn} onPressOut={onPressOut}
-      disabled={loading || disabled} activeOpacity={1}
+      onPress={onPress}
+      onPressIn={onPressIn}
+      onPressOut={onPressOut}
+      disabled={loading || disabled}
+      activeOpacity={1}
     >
-      <Animated.View style={[btnStyles.btn, { transform: [{ scale: scaleAnim }], opacity: loading || disabled ? 0.6 : 1 }]}>
+      <Animated.View
+        style={[
+          btnStyles.btn,
+          {
+            transform: [{ scale: scaleAnim }],
+            opacity: loading || disabled ? 0.6 : 1,
+          },
+        ]}
+      >
         {loading ? (
           <ActivityIndicator color={MC.bg} size="small" />
         ) : (
@@ -224,9 +240,6 @@ const btnStyles = StyleSheet.create({
   },
 });
 
-// ─────────────────────────────────────────────────────────────────
-// Forgot-password card content
-// ─────────────────────────────────────────────────────────────────
 function ForgotCard({
   onBack,
   mode,
@@ -246,10 +259,10 @@ function ForgotCard({
     ReactNativeHapticFeedback.trigger('notificationError', HAPTIC);
     Animated.sequence([
       Animated.timing(shakeX, { toValue: -8, duration: 55, useNativeDriver: true }),
-      Animated.timing(shakeX, { toValue:  8, duration: 55, useNativeDriver: true }),
+      Animated.timing(shakeX, { toValue: 8, duration: 55, useNativeDriver: true }),
       Animated.timing(shakeX, { toValue: -5, duration: 55, useNativeDriver: true }),
-      Animated.timing(shakeX, { toValue:  5, duration: 55, useNativeDriver: true }),
-      Animated.timing(shakeX, { toValue:  0, duration: 55, useNativeDriver: true }),
+      Animated.timing(shakeX, { toValue: 5, duration: 55, useNativeDriver: true }),
+      Animated.timing(shakeX, { toValue: 0, duration: 55, useNativeDriver: true }),
     ]).start();
   };
 
@@ -265,7 +278,6 @@ function ForgotCard({
       setMode('forgot_sent');
     } catch (e: any) {
       shake();
-      // Don't reveal whether the email exists — keep generic
       const msg = e?.code === 'auth/too-many-requests'
         ? 'Too many attempts. Please wait a few minutes and try again.'
         : 'Failed to send reset email. Please try again.';
@@ -278,7 +290,6 @@ function ForgotCard({
   if (mode === 'forgot_sent') {
     return (
       <View>
-        {/* Success state */}
         <View style={forgotStyles.successIconWrap}>
           <Send size={22} color={MC.green} strokeWidth={1.5} />
         </View>
@@ -297,7 +308,6 @@ function ForgotCard({
 
   return (
     <Animated.View style={{ transform: [{ translateX: shakeX }] }}>
-      {/* Header row */}
       <View style={forgotStyles.headerRow}>
         <View style={forgotStyles.iconBadge}>
           <KeyRound size={16} color={MC.green} strokeWidth={1.8} />
@@ -325,7 +335,6 @@ function ForgotCard({
         onSubmitEditing={handleSend}
       />
 
-      {/* Offline notice */}
       {!isOnline && (
         <View style={forgotStyles.offlineNote}>
           <WifiOff size={11} color={MC.rose} />
@@ -333,7 +342,6 @@ function ForgotCard({
         </View>
       )}
 
-      {/* Action row */}
       <View style={forgotStyles.actionRow}>
         <TouchableOpacity style={forgotStyles.backBtn} onPress={onBack} hitSlop={8}>
           <ChevronLeft size={13} color={MC.textSub} />
@@ -349,13 +357,14 @@ function ForgotCard({
           disabled={!isOnline || sending}
           activeOpacity={0.85}
         >
-          {sending
-            ? <ActivityIndicator size="small" color={MC.bg} />
-            : <>
-                <Text style={forgotStyles.sendBtnText}>Send link</Text>
-                <Send size={12} color={MC.bg} />
-              </>
-          }
+          {sending ? (
+            <ActivityIndicator size="small" color={MC.bg} />
+          ) : (
+            <>
+              <Text style={forgotStyles.sendBtnText}>Send link</Text>
+              <Send size={12} color={MC.bg} />
+            </>
+          )}
         </TouchableOpacity>
       </View>
     </Animated.View>
@@ -401,8 +410,6 @@ const forgotStyles = StyleSheet.create({
     minWidth: 110, justifyContent: 'center',
   },
   sendBtnText: { fontSize: 11, fontWeight: '800', color: MC.bg, fontFamily: MF.mono, letterSpacing: 0.5 },
-
-  // Success state
   successIconWrap: {
     width: 52, height: 52, borderRadius: 14,
     backgroundColor: `${MC.green}14`,
@@ -420,24 +427,21 @@ const forgotStyles = StyleSheet.create({
   },
 });
 
-// ─────────────────────────────────────────────────────────────────
-// LoginScreen
-// ─────────────────────────────────────────────────────────────────
-export default function LoginScreen() {
-  const [email, setEmail]       = useState('');
+export default function LoginScreen({ navigation }: Props) {
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [errors, setErrors]     = useState<FormErrors>({});
-  const [mode, setMode]         = useState<Mode>('login');
+  const [errors, setErrors] = useState<FormErrors>({});
+  const [mode, setMode] = useState<Mode>('login');
 
   const passwordRef = useRef<TextInputType>(null);
-  const login   = useAuthStore(s => s.login);
+  const login = useAuthStore(s => s.login);
   const loading = useAuthStore(s => s.loading);
   const isOnline = useOfflineStore(s => s.isOnline);
 
   const shakeX = useRef(new Animated.Value(0)).current;
+  const zeroX = useRef(new Animated.Value(0)).current;
   const s = useStaggerIn(7, 80);
 
-  // Animate card content cross-fade when mode changes
   const cardOpacity = useRef(new Animated.Value(1)).current;
 
   const switchMode = (next: Mode) => {
@@ -451,10 +455,10 @@ export default function LoginScreen() {
     ReactNativeHapticFeedback.trigger('notificationError', HAPTIC);
     Animated.sequence([
       Animated.timing(shakeX, { toValue: -10, duration: 55, useNativeDriver: true }),
-      Animated.timing(shakeX, { toValue:  10, duration: 55, useNativeDriver: true }),
-      Animated.timing(shakeX, { toValue:  -7, duration: 55, useNativeDriver: true }),
-      Animated.timing(shakeX, { toValue:   7, duration: 55, useNativeDriver: true }),
-      Animated.timing(shakeX, { toValue:   0, duration: 55, useNativeDriver: true }),
+      Animated.timing(shakeX, { toValue: 10, duration: 55, useNativeDriver: true }),
+      Animated.timing(shakeX, { toValue: -7, duration: 55, useNativeDriver: true }),
+      Animated.timing(shakeX, { toValue: 7, duration: 55, useNativeDriver: true }),
+      Animated.timing(shakeX, { toValue: 0, duration: 55, useNativeDriver: true }),
     ]).start();
   }
 
@@ -470,30 +474,29 @@ export default function LoginScreen() {
   }
 
   const handleLogin = async () => {
-  if (!isOnline) {
-    shake();
-    Alert.alert('Offline', 'Connect to the internet to sign in.', [{ text: 'OK' }]);
-    return;
-  }
-  if (!validate()) return;
+    if (!isOnline) {
+      shake();
+      Alert.alert('Offline', 'Connect to the internet to sign in.', [{ text: 'OK' }]);
+      return;
+    }
 
-  ReactNativeHapticFeedback.trigger('impactMedium', HAPTIC);
+    if (!validate()) return;
 
-  try {
-    await login(email.trim().toLowerCase(), password);
-    ReactNativeHapticFeedback.trigger('notificationSuccess', HAPTIC);
-    // No manual navigation here.
-    // Root navigator should redirect based on authStore.plan / tenantId / role.
-  } catch (e: any) {
-    shake();
-    const msg =
-      e?.message?.toLowerCase().includes('network') ||
-      e?.message?.toLowerCase().includes('connection')
-        ? 'Network error. Please check your internet connection and try again.'
-        : e?.message ?? 'Check your credentials and try again.';
-    Alert.alert('Authentication Failed', msg, [{ text: 'OK' }]);
-  }
-};
+    ReactNativeHapticFeedback.trigger('impactMedium', HAPTIC);
+
+    try {
+      await login(email.trim().toLowerCase(), password);
+      ReactNativeHapticFeedback.trigger('notificationSuccess', HAPTIC);
+    } catch (e: any) {
+      shake();
+      const msg =
+        e?.message?.toLowerCase().includes('network') ||
+        e?.message?.toLowerCase().includes('connection')
+          ? 'Network error. Please check your internet connection and try again.'
+          : e?.message ?? 'Check your credentials and try again.';
+      Alert.alert('Authentication Failed', msg, [{ text: 'OK' }]);
+    }
+  };
 
   return (
     <KeyboardAvoidingView
@@ -502,14 +505,12 @@ export default function LoginScreen() {
     >
       <StatusBar barStyle="light-content" backgroundColor={MC.bg} />
 
-      {/* Grid overlay */}
       <View style={styles.gridOverlay} pointerEvents="none">
         {Array.from({ length: 8 }).map((_, i) => (
           <View key={i} style={[styles.gridCol, { left: `${i * 14.28}%` as any }]} />
         ))}
       </View>
 
-      {/* Ambient blobs */}
       <View style={[styles.blob, styles.blobTL]} pointerEvents="none" />
       <View style={[styles.blob, styles.blobBR]} pointerEvents="none" />
 
@@ -518,7 +519,6 @@ export default function LoginScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* Offline banner */}
         {!isOnline && (
           <Animated.View
             style={[
@@ -528,12 +528,11 @@ export default function LoginScreen() {
           >
             <WifiOff size={12} color={MC.rose} />
             <Text style={styles.offlineBannerText}>
-              You are offline. Sign‑in is temporarily disabled.
+              You are offline. Sign-in is temporarily disabled.
             </Text>
           </Animated.View>
         )}
 
-        {/* Badge */}
         <Animated.View style={[styles.badgeRow, { opacity: s[1].opacity, transform: [{ translateY: s[1].translateY }] }]}>
           <View style={styles.badge}>
             <Shield size={10} color={MC.green} strokeWidth={2} />
@@ -542,23 +541,23 @@ export default function LoginScreen() {
           <View style={styles.statusDot} />
         </Animated.View>
 
-        {/* Eyebrow */}
         <Animated.Text style={[styles.eyebrow, { opacity: s[2].opacity, transform: [{ translateY: s[2].translateY }] }]}>
           SECURE ACCESS
         </Animated.Text>
 
-        {/* Title — changes with mode */}
         <Animated.Text style={[styles.title, { opacity: s[3].opacity, transform: [{ translateY: s[3].translateY }] }]}>
           {mode === 'login' ? `Sign in to\nyour account.` : `Reset your\npassword.`}
         </Animated.Text>
 
-        {/* Form card */}
         <Animated.View
           style={[
             styles.card,
             {
               opacity: s[4].opacity,
-              transform: [{ translateY: s[4].translateY }, { translateX: mode === 'login' ? shakeX : new Animated.Value(0) }],
+              transform: [
+                { translateY: s[4].translateY },
+                { translateX: mode === 'login' ? shakeX : zeroX },
+              ],
             },
           ]}
         >
@@ -568,7 +567,10 @@ export default function LoginScreen() {
                 <InlineInput
                   label="Email Address"
                   value={email}
-                  onChangeText={v => { setEmail(v); if (errors.email) setErrors(e => ({ ...e, email: undefined })); }}
+                  onChangeText={v => {
+                    setEmail(v);
+                    if (errors.email) setErrors(e => ({ ...e, email: undefined }));
+                  }}
                   placeholder="you@company.com"
                   error={errors.email}
                   Icon={Mail}
@@ -578,11 +580,15 @@ export default function LoginScreen() {
                   editable={!loading}
                   onSubmitEditing={() => passwordRef.current?.focus()}
                 />
+
                 <InlineInput
                   ref={passwordRef}
                   label="Password"
                   value={password}
-                  onChangeText={v => { setPassword(v); if (errors.password) setErrors(e => ({ ...e, password: undefined })); }}
+                  onChangeText={v => {
+                    setPassword(v);
+                    if (errors.password) setErrors(e => ({ ...e, password: undefined }));
+                  }}
                   placeholder="••••••••"
                   error={errors.password}
                   Icon={Lock}
@@ -591,7 +597,7 @@ export default function LoginScreen() {
                   editable={!loading}
                   onSubmitEditing={handleLogin}
                 />
-                {/* Forgot password link */}
+
                 <TouchableOpacity
                   onPress={() => switchMode('forgot')}
                   hitSlop={8}
@@ -604,26 +610,30 @@ export default function LoginScreen() {
             ) : (
               <ForgotCard
                 mode={mode}
-                setMode={(m) => { setMode(m); }}
+                setMode={m => setMode(m)}
                 onBack={() => switchMode('login')}
               />
             )}
           </Animated.View>
         </Animated.View>
 
-        {/* CTA — only shown in login mode */}
         {mode === 'login' && (
           <Animated.View style={[styles.ctaWrap, { opacity: s[5].opacity, transform: [{ translateY: s[5].translateY }] }]}>
             <SignInButton onPress={handleLogin} loading={loading} disabled={!isOnline} />
           </Animated.View>
         )}
 
-        {/* Footer */}
         <Animated.View style={[styles.footerRow, { opacity: s[6].opacity }]}>
           <View style={styles.footerDot} />
           <Text style={styles.footer}>END-TO-END ENCRYPTED</Text>
           <View style={styles.footerDot} />
         </Animated.View>
+
+        <TouchableOpacity onPress={() => navigation.navigate('Register')} activeOpacity={0.8}>
+          <Text style={styles.registerLinkText}>
+            Don’t have an account? Create workspace
+          </Text>
+        </TouchableOpacity>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -684,4 +694,12 @@ const styles = StyleSheet.create({
   footerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
   footerDot: { width: 3, height: 3, borderRadius: 1.5, backgroundColor: MC.textFaint },
   footer: { fontSize: 9, color: MC.textFaint, fontFamily: MF.mono, letterSpacing: 2.5 },
+  registerLinkText: {
+    color: MC.green,
+    textAlign: 'center',
+    marginTop: 16,
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: MF.mono,
+  },
 });
