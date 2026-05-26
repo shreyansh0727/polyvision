@@ -470,26 +470,30 @@ export default function LoginScreen() {
   }
 
   const handleLogin = async () => {
-    if (!isOnline) {
-      shake();
-      Alert.alert('Offline', 'Connect to the internet to sign in.', [{ text: 'OK' }]);
-      return;
-    }
-    if (!validate()) return;
-    ReactNativeHapticFeedback.trigger('impactMedium', HAPTIC);
-    try {
-      await login(email.trim().toLowerCase(), password);
-      ReactNativeHapticFeedback.trigger('notificationSuccess', HAPTIC);
-    } catch (e: any) {
-      shake();
-      const msg =
-        e?.message?.toLowerCase().includes('network') ||
-        e?.message?.toLowerCase().includes('connection')
-          ? 'Network error. Please check your internet connection and try again.'
-          : e?.message ?? 'Check your credentials and try again.';
-      Alert.alert('Authentication Failed', msg, [{ text: 'OK' }]);
-    }
-  };
+  if (!isOnline) {
+    shake();
+    Alert.alert('Offline', 'Connect to the internet to sign in.', [{ text: 'OK' }]);
+    return;
+  }
+  if (!validate()) return;
+
+  ReactNativeHapticFeedback.trigger('impactMedium', HAPTIC);
+
+  try {
+    await login(email.trim().toLowerCase(), password);
+    ReactNativeHapticFeedback.trigger('notificationSuccess', HAPTIC);
+    // No manual navigation here.
+    // Root navigator should redirect based on authStore.plan / tenantId / role.
+  } catch (e: any) {
+    shake();
+    const msg =
+      e?.message?.toLowerCase().includes('network') ||
+      e?.message?.toLowerCase().includes('connection')
+        ? 'Network error. Please check your internet connection and try again.'
+        : e?.message ?? 'Check your credentials and try again.';
+    Alert.alert('Authentication Failed', msg, [{ text: 'OK' }]);
+  }
+};
 
   return (
     <KeyboardAvoidingView
