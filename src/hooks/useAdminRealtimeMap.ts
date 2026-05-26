@@ -13,93 +13,145 @@ import {
 import { useAuthStore } from '../store/authStore';
 import { useLocationStore } from '../store/locationStore';
 
-interface RealtimeMapControls {
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface RealtimeMapControls {
   attach: () => void;
   detach: () => void;
 }
 
+interface CleanupBundle {
+  unsubAdded:   () => void;
+  unsubChanged: () => void;
+  unsubRemoved: () => void;
+  appSub:       { remove: () => void };
+}
+
+// ─── Hook ─────────────────────────────────────────────────────────────────────
+
 export function useAdminRealtimeMap(): RealtimeMapControls {
+  // Read auth state via stable selectors — these won't change identity each render
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  const employee = useAuthStore((s) => s.employee);
+  const tenantId        = useAuthStore((s) => s.employee?.tenant_id);
 
-  const getStoreActions = useCallback(() => ({
-    seedFromApi: useLocationStore.getState().seedFromApi,
-    updateEmployee: useLocationStore.getState().updateEmployee,
-    updateEmployeeStatus: useLocationStore.getState().updateEmployeeStatus,
-    clearAll: useLocationStore.getState().clearAll,
-  }), []);
+  const cleanupRef = useRef<CleanupBundle | null>(null);
 
-  const cleanupRef = useRef<{
-    unsubAdded: () => void;
-    unsubChanged: () => void;
-    unsubRemoved: () => void;
-    appSub: { remove: () => void };
-  } | null>(null);
-
+  // ── attach ──────────────────────────────────────────────────────────────────
   const attach = useCallback(() => {
-    if (!isAuthenticated) return;
-    if (!employee?.tenant_id) {
-      console.warn('[RealtimeMap] Missing tenant_id for admin');
+    if (!isAuthenticated) {
+      if (__DEV__) console.warn('[RealtimeMap] attach() called while unauthenticated — skipping');
       return;
     }
-    if (cleanupRef.current) return;
 
-    const actions = getStoreActions();
+    if (!tenantId) {
+      console.warn('[RealtimeMap] Missing tenant_id for admin — skipping attach');
+      return;
+    }
 
-    actions.seedFromApi();
+    // Guard against double-attach without detach in between
+    if (cleanupRef.current) {
+      if (__DEV__) console.warn('[RealtimeMap] Already attached — ignoring duplicate attach()');
+      return;
+    }
 
-    const liveRef = ref(
-      getDatabase(),
-      `tenants/${employee.tenant_id}/locations`
-    );
+    // ── Access store actions via getState() — NOT via hooks (no Rules of Hooks violation)
+    // Zustand's getState() is a plain static getter, safe to call anywhere.
+    const { seedFromApi, updateEmployee, updateEmployeeStatus } = useLocationStore.getState();
 
-    const handleSnapshot = (snapshot: DataSnapshot) => {
-      const data = snapshot.val();
+    // Kick off the initial HTTP seed (non-blocking; failures are logged inside seedFromApi)
+    seedFromApi().catch((err: unknown) => {
+      console.warn('[RealtimeMap] seedFromApi() failed:', err);
+    });
+
+    const liveRef = ref(getDatabase(), `tenants/${tenantId}/locations`);
+
+    // ── Stable snapshot handler — defined once, reused for added + changed ───
+    const handleSnapshot = (snapshot: DataSnapshot): void => {
+      const data        = snapshot.val();
       const employee_id = snapshot.key;
 
-      if (!data || !employee_id) return;
+      // Defensive: skip malformed payloads
+      if (!data || typeof data !== 'object' || !employee_id) return;
 
-      getStoreActions().updateEmployee({
+      // Validate that coordinates are present and numeric before writing to store
+      const lat = typeof data.lat === 'number' && isFinite(data.lat) ? data.lat : null;
+      const lng = typeof data.lng === 'number' && isFinite(data.lng) ? data.lng : null;
+
+      if (lat === null || lng === null) {
+        if (__DEV__) {
+          console.warn(`[RealtimeMap] Skipping employee ${employee_id}: invalid coords`, data);
+        }
+        return;
+      }
+
+      // Call getState() here (not the captured reference above) so we always
+      // use the latest action even if the store was replaced during hot reload.
+      useLocationStore.getState().updateEmployee({
         employee_id,
-        lat: data.lat,
-        lng: data.lng,
-        ...(data.accuracy != null && { accuracy: data.accuracy }),
-        ...(data.battery != null && { battery: data.battery }),
-        recorded_at: data.recorded_at ?? new Date().toISOString(),
-        is_online: data.is_online ?? true,
+        lat,
+        lng,
+        ...(typeof data.accuracy === 'number' && isFinite(data.accuracy)
+          ? { accuracy: data.accuracy }
+          : {}),
+        ...(typeof data.battery === 'number' &&
+          data.battery >= 0 &&
+          data.battery <= 100
+          ? { battery: Math.round(data.battery) }
+          : {}),
+        recorded_at: typeof data.recorded_at === 'string' && data.recorded_at
+          ? data.recorded_at
+          : new Date().toISOString(),
+        is_online: data.is_online === true,
       });
     };
 
-    const unsubAdded = onChildAdded(liveRef, handleSnapshot);
-    const unsubChanged = onChildChanged(liveRef, handleSnapshot);
-    const unsubRemoved = onChildRemoved(liveRef, (snapshot: DataSnapshot) => {
-      if (snapshot.key) {
-        getStoreActions().updateEmployeeStatus(snapshot.key, false);
-      }
-    });
+    const handleRemoved = (snapshot: DataSnapshot): void => {
+      if (!snapshot.key) return;
+      useLocationStore.getState().updateEmployeeStatus(snapshot.key, false);
+    };
 
+    // ── Register Firebase listeners ──────────────────────────────────────────
+    let unsubAdded:   () => void;
+    let unsubChanged: () => void;
+    let unsubRemoved: () => void;
+
+    try {
+      unsubAdded   = onChildAdded(liveRef,   handleSnapshot);
+      unsubChanged = onChildChanged(liveRef, handleSnapshot);
+      unsubRemoved = onChildRemoved(liveRef, handleRemoved);
+    } catch (err) {
+      console.error('[RealtimeMap] Failed to register Firebase listeners:', err);
+      return;
+    }
+
+    // ── Re-seed on foreground resume (covers offline → online transitions) ───
     const appSub = AppState.addEventListener('change', (next: AppStateStatus) => {
-      if (next === 'active' && getAuth().currentUser) {
-        getStoreActions().seedFromApi();
-      }
+      if (next !== 'active') return;
+      // Confirm the user is still authenticated before hitting the API
+      if (!getAuth().currentUser) return;
+      useLocationStore.getState().seedFromApi().catch((err: unknown) => {
+        console.warn('[RealtimeMap] AppState resume seedFromApi() failed:', err);
+      });
     });
 
     cleanupRef.current = { unsubAdded, unsubChanged, unsubRemoved, appSub };
-  }, [isAuthenticated, employee?.tenant_id, getStoreActions]);
+  }, [isAuthenticated, tenantId]);
 
+  // ── detach ──────────────────────────────────────────────────────────────────
   const detach = useCallback(() => {
     if (!cleanupRef.current) return;
 
     const { unsubAdded, unsubChanged, unsubRemoved, appSub } = cleanupRef.current;
 
-    unsubAdded();
-    unsubChanged();
-    unsubRemoved();
-    appSub.remove();
-    getStoreActions().clearAll();
+    try { unsubAdded();   } catch (e) { console.warn('[RealtimeMap] unsubAdded error:', e); }
+    try { unsubChanged(); } catch (e) { console.warn('[RealtimeMap] unsubChanged error:', e); }
+    try { unsubRemoved(); } catch (e) { console.warn('[RealtimeMap] unsubRemoved error:', e); }
+    try { appSub.remove(); } catch (e) { console.warn('[RealtimeMap] appSub.remove error:', e); }
+
+    useLocationStore.getState().clearAll();
 
     cleanupRef.current = null;
-  }, [getStoreActions]);
+  }, []);
 
   return { attach, detach };
 }

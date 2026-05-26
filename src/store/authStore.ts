@@ -20,6 +20,7 @@ export interface AuthEmployee extends Employee {
   payment_ref?: string | null;
   activated_at?: string | null;
   tenant_created_at?: string | null;
+  firebase_uid: string;
 }
 
 interface AuthStore {
