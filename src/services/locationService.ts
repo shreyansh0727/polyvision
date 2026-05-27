@@ -277,11 +277,10 @@ const backgroundOptions = {
  * @param firebaseUid - Firebase Auth UID (used as RTDB path key to satisfy security rules)
  */
 export async function startTracking(
-  tenantId:    string,
-  employeeId:  string,
+  tenantId: string,
+  employeeId: string,
   firebaseUid: string,
 ): Promise<void> {
-  // Mutex: prevent concurrent start calls
   if (isTracking || startLock) {
     console.warn('[Tracking] Already running or starting — ignoring duplicate start');
     return;
@@ -292,28 +291,45 @@ export async function startTracking(
     const granted = await requestLocationPermissions();
     if (!granted) return;
 
-    // Path key is firebaseUid
     const locRef = ref(getDatabase(), `tenants/${tenantId}/locations/${firebaseUid}`);
 
-    // Register onDisconnect BEFORE writing is_online: true
-    // so the server-side cleanup fires even if the app crashes mid-start
     await onDisconnect(locRef).update({ is_online: false });
 
-    await update(locRef, {
-      employee_id:  employeeId,
-      firebase_uid: firebaseUid,
-      is_online:    true,
+    // Get one position first so the initial RTDB write satisfies validation rules
+    await new Promise<void>((resolve, reject) => {
+      Geolocation.getCurrentPosition(
+        async (pos: GeolocationResponse) => {
+          try {
+            await writeLocation(tenantId, firebaseUid, employeeId, {
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+              accuracy: pos.coords.accuracy,
+              battery: await getBattery(),
+            });
+            resolve();
+          } catch (e) {
+            reject(e);
+          }
+        },
+        (err: GeolocationError) => {
+          reject(err);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 5000,
+        },
+      );
     });
 
-    // Start foreground GPS watcher
     watchId = Geolocation.watchPosition(
       async (pos: GeolocationResponse) => {
         try {
           await writeLocation(tenantId, firebaseUid, employeeId, {
-            lat:      pos.coords.latitude,
-            lng:      pos.coords.longitude,
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
             accuracy: pos.coords.accuracy,
-            battery:  await getBattery(),
+            battery: await getBattery(),
           });
         } catch (e) {
           console.warn('[GEO] writeLocation error in watcher:', e);
@@ -324,13 +340,12 @@ export async function startTracking(
       },
       {
         enableHighAccuracy: true,
-        distanceFilter:     15,
-        interval:           10_000,
-        fastestInterval:    5_000,
+        distanceFilter: 15,
+        interval: 10_000,
+        fastestInterval: 5_000,
       },
     );
 
-    // Start background service (Android foreground service / iOS background mode)
     if (!BackgroundActions.isRunning()) {
       await BackgroundActions.start(backgroundTask, {
         ...backgroundOptions,
@@ -342,7 +357,6 @@ export async function startTracking(
     if (__DEV__) console.log('[Tracking] Started ✅');
   } catch (e: unknown) {
     console.error('[Tracking] startTracking crashed:', e);
-    // Best-effort rollback — don't re-throw from cleanup
     await stopTracking(tenantId, firebaseUid).catch(() => {});
     throw e;
   } finally {
