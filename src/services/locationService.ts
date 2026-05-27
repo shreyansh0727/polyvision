@@ -25,16 +25,21 @@ import {
 import { apiPost } from './api';
 import { useOfflineStore } from '../store/offlineStore';
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const GPS_HIGH_ACCURACY_TIMEOUT_MS = 20_000;  // 20 s — high accuracy first attempt
+const GPS_LOW_ACCURACY_TIMEOUT_MS  = 30_000;  // 30 s — fallback
+const GPS_MAX_AGE_MS               = 10_000;  // accept a cached fix up to 10 s old
+const BG_POLL_INTERVAL_MS          = 30_000;  // background poll every 30 s
+const BATTERY_CACHE_MS             = 60_000;  // re-read battery at most once/min
+const WATCH_DISTANCE_FILTER_M      = 15;      // foreground watcher movement threshold
+
 // ─── Module-level state ───────────────────────────────────────────────────────
-// These are intentionally module-level so they survive React re-renders.
-// They are protected by a mutex pattern to prevent race conditions.
 
 let watchId:    number | null = null;
 let bgInterval: ReturnType<typeof setInterval> | null = null;
 
-// `isTracking` and `startLock` together form a mutex:
-//   - `isTracking` reflects the settled state (started or stopped)
-//   - `startLock` prevents concurrent start calls from racing past the guard
+// Mutex pair: isTracking = settled state, startLock = in-progress guard
 let isTracking = false;
 let startLock  = false;
 
@@ -45,9 +50,9 @@ let _lastBatteryAt: number = 0;
 
 /** Cached battery level; refreshed at most once per minute */
 async function getBattery(): Promise<number> {
-  if (Date.now() - _lastBatteryAt > 60_000) {
+  if (Date.now() - _lastBatteryAt > BATTERY_CACHE_MS) {
     try {
-      const raw = await DeviceInfo.getBatteryLevel();
+      const raw      = await DeviceInfo.getBatteryLevel();
       _lastBattery   = Math.min(100, Math.max(0, Math.round(raw * 100)));
       _lastBatteryAt = Date.now();
     } catch (e) {
@@ -67,10 +72,10 @@ export async function requestLocationPermissions(): Promise<boolean> {
     foreground = await PermissionsAndroid.request(
       PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
       {
-        title:           'Location Permission',
-        message:         'Employee Tracker needs your location for shift tracking.',
-        buttonPositive:  'Allow',
-        buttonNegative:  'Deny',
+        title:          'Location Permission',
+        message:        'Employee Tracker needs your location for shift tracking.',
+        buttonPositive: 'Allow',
+        buttonNegative: 'Deny',
       },
     );
   } catch (e) {
@@ -91,10 +96,10 @@ export async function requestLocationPermissions(): Promise<boolean> {
       const background = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.ACCESS_BACKGROUND_LOCATION,
         {
-          title:           'Background Location',
-          message:         'Allow "Always" location access so tracking continues when the app is minimised.',
-          buttonPositive:  'Allow',
-          buttonNegative:  'Skip',
+          title:          'Background Location',
+          message:        'Allow "Always" location access so tracking continues when the app is minimised.',
+          buttonPositive: 'Allow',
+          buttonNegative: 'Skip',
         },
       );
       if (background !== PermissionsAndroid.RESULTS.GRANTED) {
@@ -106,6 +111,72 @@ export async function requestLocationPermissions(): Promise<boolean> {
   }
 
   return true;
+}
+
+// ─── GPS helpers ──────────────────────────────────────────────────────────────
+
+interface GpsResult {
+  lat:      number;
+  lng:      number;
+  accuracy: number | null;
+}
+
+/**
+ * Get current position with automatic high→low accuracy fallback.
+ *
+ * Strategy:
+ *   1. Try high-accuracy GPS (20 s timeout).
+ *   2. On timeout or error, fall back to network/passive location (30 s timeout).
+ *   3. If both fail, throw so the caller can decide how to handle it.
+ */
+async function getCurrentPositionWithFallback(): Promise<GpsResult> {
+  // ── Attempt 1: high accuracy ─────────────────────────────────────────────
+  try {
+    return await new Promise<GpsResult>((resolve, reject) => {
+      Geolocation.getCurrentPosition(
+        (pos: GeolocationResponse) => resolve({
+          lat:      pos.coords.latitude,
+          lng:      pos.coords.longitude,
+          accuracy: pos.coords.accuracy ?? null,
+        }),
+        (err: GeolocationError) => reject(err),
+        {
+          enableHighAccuracy: true,
+          timeout:            GPS_HIGH_ACCURACY_TIMEOUT_MS,
+          maximumAge:         GPS_MAX_AGE_MS,
+        },
+      );
+    });
+  } catch (e: unknown) {
+    const code = (e as GeolocationError)?.code;
+    // code 3 = TIMEOUT, code 2 = POSITION_UNAVAILABLE — both warrant a fallback
+    if (code === 3 || code === 2) {
+      if (__DEV__) console.warn('[GPS] High-accuracy timed out — falling back to low accuracy');
+    } else {
+      // Unexpected error (e.g. code 1 = PERMISSION_DENIED) — don't retry
+      throw e;
+    }
+  }
+
+  // ── Attempt 2: low accuracy / network-based ───────────────────────────────
+  return new Promise<GpsResult>((resolve, reject) => {
+    Geolocation.getCurrentPosition(
+      (pos: GeolocationResponse) => resolve({
+        lat:      pos.coords.latitude,
+        lng:      pos.coords.longitude,
+        accuracy: pos.coords.accuracy ?? null,
+      }),
+      (err: GeolocationError) => {
+        console.error('[GPS] Low-accuracy fallback also failed:', err.message, 'code:', err.code);
+        reject(new Error(`Location unavailable (code ${err.code}): ${err.message}`));
+      },
+      {
+        enableHighAccuracy: false,
+        timeout:            GPS_LOW_ACCURACY_TIMEOUT_MS,
+        maximumAge:         GPS_MAX_AGE_MS,
+      },
+    );
+  });
 }
 
 // ─── Backend write ────────────────────────────────────────────────────────────
@@ -147,7 +218,7 @@ async function writeLocationToBackend(payload: {
   try {
     await apiPost('/location/ping', body);
   } catch (e) {
-    // Non-fatal: RTDB already has the update; the REST endpoint is secondary
+    // Non-fatal: RTDB already has the update; REST endpoint is secondary
     console.warn('[API] /location/ping failed:', e);
   }
 }
@@ -195,8 +266,8 @@ async function writeLocation(
     throw e;
   }
 
-  // Best-effort REST ping (non-blocking path)
-  await writeLocationToBackend(payload);
+  // Best-effort REST ping (non-blocking)
+  writeLocationToBackend(payload).catch(() => {});
 }
 
 // ─── Background task ──────────────────────────────────────────────────────────
@@ -209,11 +280,7 @@ interface BgTaskData {
 
 /**
  * Background task: polls GPS every 30 s and pushes to RTDB.
- *
- * The function must never return until BackgroundActions cancels it.
- * We implement this as a `while(true)` loop with a Promise-based sleep
- * instead of the original never-settling `new Promise(() => {...})`,
- * which leaked the interval on task termination.
+ * Uses the high→low accuracy fallback so indoor devices don't stall.
  */
 const backgroundTask = async (taskData: unknown): Promise<void> => {
   const data = taskData as Partial<BgTaskData> | null;
@@ -224,35 +291,21 @@ const backgroundTask = async (taskData: unknown): Promise<void> => {
   }
 
   const { tenantId, employeeId, firebaseUid } = data as BgTaskData;
-  const POLL_INTERVAL_MS = 30_000;
-
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
   while (true) {
-    await new Promise<void>((resolve) => {
-      Geolocation.getCurrentPosition(
-        async (pos: GeolocationResponse) => {
-          try {
-            await writeLocation(tenantId, firebaseUid, employeeId, {
-              lat:      pos.coords.latitude,
-              lng:      pos.coords.longitude,
-              accuracy: pos.coords.accuracy,
-              battery:  await getBattery(),
-            });
-          } catch (e) {
-            console.warn('[BG] writeLocation error:', e);
-          }
-          resolve();
-        },
-        (err: GeolocationError) => {
-          console.warn('[BG] GPS error:', err.message, err.code);
-          resolve(); // don't stall the loop on GPS failure
-        },
-        { enableHighAccuracy: false, timeout: 10_000 },
-      );
-    });
+    try {
+      const pos = await getCurrentPositionWithFallback();
+      await writeLocation(tenantId, firebaseUid, employeeId, {
+        ...pos,
+        battery: await getBattery(),
+      });
+    } catch (e) {
+      // Log but never crash the loop — next iteration will retry
+      console.warn('[BG] GPS/write error (will retry next cycle):', (e as Error)?.message ?? e);
+    }
 
-    await sleep(POLL_INTERVAL_MS);
+    await sleep(BG_POLL_INTERVAL_MS);
   }
 };
 
@@ -272,13 +325,18 @@ const backgroundOptions = {
 /**
  * Start location tracking.
  *
+ * CHANGE: The initial GPS fix is now non-blocking. Tracking starts immediately
+ * (watcher + background service), and the first RTDB write happens as soon as
+ * a position is available — even if that takes 30+ seconds on weak signal.
+ * This prevents the "location request timed out" crash on slow GPS devices.
+ *
  * @param tenantId    - Tenant ID
  * @param employeeId  - DB employee record ID (stored as a field in RTDB)
  * @param firebaseUid - Firebase Auth UID (used as RTDB path key to satisfy security rules)
  */
 export async function startTracking(
-  tenantId: string,
-  employeeId: string,
+  tenantId:    string,
+  employeeId:  string,
   firebaseUid: string,
 ): Promise<void> {
   if (isTracking || startLock) {
@@ -289,74 +347,90 @@ export async function startTracking(
 
   try {
     const granted = await requestLocationPermissions();
-    if (!granted) return;
+    if (!granted) {
+      startLock = false;
+      return;
+    }
 
     const locRef = ref(getDatabase(), `tenants/${tenantId}/locations/${firebaseUid}`);
 
-    await onDisconnect(locRef).update({ is_online: false });
+    // Register onDisconnect BEFORE anything else so it's set even if GPS is slow
+    try {
+      await onDisconnect(locRef).update({ is_online: false });
+    } catch (e) {
+      console.warn('[RTDB] onDisconnect setup failed:', e);
+      // Non-fatal — continue starting tracking
+    }
 
-    // Get one position first so the initial RTDB write satisfies validation rules
-    await new Promise<void>((resolve, reject) => {
-      Geolocation.getCurrentPosition(
-        async (pos: GeolocationResponse) => {
-          try {
-            await writeLocation(tenantId, firebaseUid, employeeId, {
-              lat: pos.coords.latitude,
-              lng: pos.coords.longitude,
-              accuracy: pos.coords.accuracy,
-              battery: await getBattery(),
-            });
-            resolve();
-          } catch (e) {
-            reject(e);
-          }
-        },
-        (err: GeolocationError) => {
-          reject(err);
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 15000,
-          maximumAge: 5000,
-        },
-      );
-    });
-
-    watchId = Geolocation.watchPosition(
-      async (pos: GeolocationResponse) => {
+    // ── Non-blocking initial fix ─────────────────────────────────────────────
+    // Fire-and-forget: kick off a position request in the background.
+    // If it succeeds quickly, RTDB gets an immediate update.
+    // If it's slow (indoor, weak signal), tracking is already running via the
+    // watcher and background task — the user isn't shown a timeout error.
+    getCurrentPositionWithFallback()
+      .then(async (pos) => {
+        if (!isTracking) return; // aborted before fix arrived
         try {
           await writeLocation(tenantId, firebaseUid, employeeId, {
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-            accuracy: pos.coords.accuracy,
+            ...pos,
             battery: await getBattery(),
+          });
+          if (__DEV__) console.log('[Tracking] Initial fix written ✅', pos);
+        } catch (e) {
+          console.warn('[Tracking] Initial RTDB write failed:', e);
+        }
+      })
+      .catch((e) => {
+        // Both high and low accuracy failed — the watcher will still push
+        // updates whenever the device gets a fix.
+        console.warn('[Tracking] Initial position unavailable (watcher will recover):', e);
+      });
+
+    // ── Foreground watcher ───────────────────────────────────────────────────
+    watchId = Geolocation.watchPosition(
+      async (pos: GeolocationResponse) => {
+        if (!isTracking) return;
+        try {
+          await writeLocation(tenantId, firebaseUid, employeeId, {
+            lat:      pos.coords.latitude,
+            lng:      pos.coords.longitude,
+            accuracy: pos.coords.accuracy ?? null,
+            battery:  await getBattery(),
           });
         } catch (e) {
           console.warn('[GEO] writeLocation error in watcher:', e);
         }
       },
       (err: GeolocationError) => {
-        console.warn('[GEO] watchPosition error:', err.message, err.code);
+        console.warn('[GEO] watchPosition error:', err.message, 'code:', err.code);
       },
       {
         enableHighAccuracy: true,
-        distanceFilter: 15,
-        interval: 10_000,
-        fastestInterval: 5_000,
+        distanceFilter:     WATCH_DISTANCE_FILTER_M,
+        interval:           10_000,
+        fastestInterval:    5_000,
       },
     );
 
+    // ── Background service ───────────────────────────────────────────────────
     if (!BackgroundActions.isRunning()) {
-      await BackgroundActions.start(backgroundTask, {
-        ...backgroundOptions,
-        parameters: { tenantId, employeeId, firebaseUid },
-      });
+      try {
+        await BackgroundActions.start(backgroundTask, {
+          ...backgroundOptions,
+          parameters: { tenantId, employeeId, firebaseUid },
+        });
+      } catch (e) {
+        console.warn('[Tracking] BackgroundActions.start() failed:', e);
+        // Non-fatal — foreground watcher is still active
+      }
     }
 
     isTracking = true;
     if (__DEV__) console.log('[Tracking] Started ✅');
+
   } catch (e: unknown) {
     console.error('[Tracking] startTracking crashed:', e);
+    // Clean up any partial state
     await stopTracking(tenantId, firebaseUid).catch(() => {});
     throw e;
   } finally {
@@ -374,21 +448,18 @@ export async function stopTracking(
   tenantId?:    string,
   firebaseUid?: string,
 ): Promise<void> {
-  // Clear tracking state immediately so any in-flight watcher callbacks
-  // won't queue new writes after stop is called.
+  // Clear immediately so any in-flight watcher callbacks won't write after stop
   isTracking = false;
 
   // ── Mark employee offline in RTDB ────────────────────────────────────────
   if (tenantId && firebaseUid) {
     try {
       const locRef = ref(getDatabase(), `tenants/${tenantId}/locations/${firebaseUid}`);
-      // Cancel the onDisconnect handler first, then write explicitly
       await onDisconnect(locRef).cancel();
       await update(locRef, { is_online: false });
     } catch (e) {
       console.warn('[RTDB] Failed to mark employee offline:', e);
-      // Non-fatal: the onDisconnect handler set during startTracking
-      // will fire when the connection drops, cleaning up server-side.
+      // Non-fatal: onDisconnect handler will fire when connection drops
     }
   }
 
@@ -402,7 +473,7 @@ export async function stopTracking(
     watchId = null;
   }
 
-  // ── Clear legacy interval (kept for safety; backgroundTask no longer uses it) ─
+  // ── Clear legacy interval ─────────────────────────────────────────────────
   if (bgInterval !== null) {
     clearInterval(bgInterval);
     bgInterval = null;
