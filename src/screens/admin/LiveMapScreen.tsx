@@ -4,6 +4,33 @@
  * Production-hardened: error boundaries, null-safety, stable callbacks,
  * memory-leak prevention, accessibility, defensive type narrowing,
  * graceful degradation, and clean-up on every effect.
+ *
+ * ─────────────────────────────────────────────────────────────────
+ * RTDB SCHEMA UPDATE  (tenants/{tenantId}/locations/{firebaseUid})
+ * ─────────────────────────────────────────────────────────────────
+ *  [RD1] getRtdbKey() — single helper that resolves the RTDB path key
+ *        (firebase_uid when present, falls back to employee_id for legacy
+ *        records).  Every place that previously called safeEmployeeId() now
+ *        calls getRtdbKey() so marker keys, store lookups, pulse tracking,
+ *        and focus navigation all use the same identifier.
+ *
+ *  [RD2] safeEmployeeId() retained for display / accessibility labels where
+ *        the human-readable DB employee UUID is still the right value.
+ *
+ *  [RD3] liveEmployees store is now keyed by firebaseUid.  All lookups that
+ *        previously did liveEmployees[employee_id] now use
+ *        liveEmployees[getRtdbKey(emp)].
+ *
+ *  [RD4] focusId route param is now a firebaseUid.  On mount the screen
+ *        reads route.params?.focusId, resolves it against the store by
+ *        firebase_uid, and auto-selects + focuses that employee.
+ *
+ *  [RD5] prevIdsRef (new-employee pulse) now tracks firebaseUids so a
+ *        re-auth (new UID, same DB employee) correctly triggers the pulse.
+ *
+ *  [RD6] selectedEmployee refresh effect looks up the updated record by
+ *        getRtdbKey(selectedEmployee), matching the store's key scheme.
+ * ─────────────────────────────────────────────────────────────────
  */
 
 import React, {
@@ -16,7 +43,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path, Defs, RadialGradient, Stop } from 'react-native-svg';
 import MapView, { PROVIDER_GOOGLE, Region } from 'react-native-maps';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
 import {
   MapPin, Users, Clock,
   BatteryLow, BatteryMedium, BatteryFull,
@@ -31,26 +58,31 @@ import EmployeeMarker          from '../../components/map/EmployeeMarker';
 import EmployeeListPanel       from '../../components/map/EmployeeListPanel';
 import { MC }                  from '../../navigation/AppTheme';
 
+// ─── Route params ─────────────────────────────────────────────────────────────
+
+type LiveMapParams = {
+  LiveMap: {
+    /** [RD4] firebaseUid of the employee to auto-focus on mount */
+    focusId?: string;
+  };
+};
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 /** Lucknow, Uttar Pradesh — sensible India-wide default */
 const DEFAULT_REGION: Region = {
-  latitude: 26.8467,
-  longitude: 80.9462,
-  latitudeDelta: 5,
+  latitude:      26.8467,
+  longitude:     80.9462,
+  latitudeDelta:  5,
   longitudeDelta: 5,
 };
 
-/** How long "new employee" pulse lasts (ms) */
-const NEW_ID_TTL_MS = 600;
-
-/** Animate-to zoom when focusing an employee */
-const FOCUS_DELTA = 0.008;
-
-/** Slide animation durations (ms) */
-const CARD_SPRING_FRICTION  = 10;
-const CARD_SPRING_TENSION   = 130;
-const CARD_DISMISS_DURATION = 200;
+const NEW_ID_TTL_MS          = 600;
+const FOCUS_DELTA            = 0.008;
+const CARD_SPRING_FRICTION   = 10;
+const CARD_SPRING_TENSION    = 130;
+const CARD_DISMISS_DURATION  = 200;
+const LIST_EXIT_DELAY_MS     = 150;
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
 
@@ -81,13 +113,33 @@ function isValidCoord(lat: unknown, lng: unknown): lat is number {
     typeof lat === 'number' &&
     typeof lng === 'number' &&
     isFinite(lat) && isFinite(lng) &&
-    lat >= -90  && lat <= 90 &&
+    lat >= -90  && lat <= 90  &&
     lng >= -180 && lng <= 180
   );
 }
 
+/**
+ * [RD2] Human-readable DB employee UUID — used for display/accessibility only.
+ * Do NOT use as a store/RTDB lookup key.
+ */
 function safeEmployeeId(emp: LiveEmployee): string {
-  return emp.employee_id ?? '';
+  return (emp.employee_id ?? '') as string;
+}
+
+/**
+ * [RD1] RTDB path key resolver.
+ * Returns firebase_uid when present (new schema), falls back to employee_id
+ * for legacy records that pre-date the schema migration.
+ *
+ * Use this for:
+ *   - MapView / React list keys
+ *   - liveEmployees store lookups  (liveEmployees[getRtdbKey(emp)])
+ *   - New-employee pulse tracking
+ *   - focusId route param matching
+ */
+function getRtdbKey(emp: LiveEmployee): string {
+  return (((emp as unknown) as Record<string, unknown>).firebase_uid as string | undefined)
+      ?? (emp.employee_id ?? '') as string;
 }
 
 // ─── Error Boundary ───────────────────────────────────────────────────────────
@@ -106,7 +158,6 @@ class MapErrorBoundary extends Component<
   }
 
   componentDidCatch(error: unknown, info: React.ErrorInfo) {
-    // Replace with your production logger (Sentry, Datadog, etc.)
     if (__DEV__) {
       console.error('[LiveMapScreen] Uncaught render error:', error, info.componentStack);
     }
@@ -140,8 +191,8 @@ const eb = StyleSheet.create({
 
 // ─── BatteryIcon ──────────────────────────────────────────────────────────────
 
-const BATTERY_HIGH  = 50;
-const BATTERY_LOW   = 20;
+const BATTERY_HIGH = 50;
+const BATTERY_LOW  = 20;
 
 function batteryColor(level: number): string {
   if (level > BATTERY_HIGH) return C.green;
@@ -229,7 +280,6 @@ function InfoRow({ icon, iconBg, label, value, mono }: InfoRowProps) {
 // ─── BatteryRow ───────────────────────────────────────────────────────────────
 
 function BatteryRow({ battery, color, bg }: { battery: number; color: string; bg: string }) {
-  // Clamp to 0–100 for the width style — avoids layout glitches on bad data
   const pct = Math.min(100, Math.max(0, Math.round(battery)));
   return (
     <View style={cs.row} accessible accessibilityLabel={`Battery: ${pct}%`}>
@@ -240,7 +290,6 @@ function BatteryRow({ battery, color, bg }: { battery: number; color: string; bg
         <Text style={cs.rowLabel}>Battery</Text>
         <View style={cs.batteryBar}>
           <View style={cs.batteryTrack}>
-            {/* Use a concrete pixel-percent via flex instead of template literal */}
             <View style={[cs.batteryFill, { flex: pct / 100, backgroundColor: color }]} />
           </View>
           <Text style={[cs.batteryPct, { color }]}>{pct}%</Text>
@@ -265,8 +314,8 @@ const EmployeeInfoCard = memo(function EmployeeInfoCard({
   onFocus,
   bottomOffset,
 }: EmployeeInfoCardProps) {
-  const slideAnim = useRef(new Animated.Value(140)).current;
-  const dismissedRef = useRef(false); // prevent double-fire
+  const slideAnim    = useRef(new Animated.Value(140)).current;
+  const dismissedRef = useRef(false);
 
   useEffect(() => {
     const anim = Animated.spring(slideAnim, {
@@ -283,9 +332,7 @@ const EmployeeInfoCard = memo(function EmployeeInfoCard({
     const anim = Animated.timing(slideAnim, {
       toValue: 180, duration: CARD_DISMISS_DURATION, useNativeDriver: true,
     });
-    anim.start(({ finished }) => {
-      if (finished) onClose();
-    });
+    anim.start(({ finished }) => { if (finished) onClose(); });
   }, [onClose, slideAnim]);
 
   const handleFocusPress = useCallback(() => {
@@ -297,11 +344,10 @@ const EmployeeInfoCard = memo(function EmployeeInfoCard({
   const displayName = (employee.name ?? '').trim() || 'Unknown';
   const initial     = displayName.charAt(0).toUpperCase();
 
-  // Memoised so the card body doesn't re-render on unrelated store ticks
   const timeAgo = useMemo(() => {
     if (!employee.recorded_at) return '—';
     try {
-      const ts   = new Date(employee.recorded_at).getTime();
+      const ts = new Date(employee.recorded_at).getTime();
       if (isNaN(ts)) return '—';
       const diff = Math.floor((Date.now() - ts) / 1000);
       if (diff < 60)    return 'Just now';
@@ -314,7 +360,7 @@ const EmployeeInfoCard = memo(function EmployeeInfoCard({
   }, [employee.recorded_at]);
 
   const battery = employee.battery ?? null;
-  const bColor  = battery == null ? C.muted  : batteryColor(battery);
+  const bColor  = battery == null ? C.muted : batteryColor(battery);
   const bBg     = battery == null ? '#f3f0ec'
                 : battery > BATTERY_HIGH ? C.greenLight
                 : battery > BATTERY_LOW  ? C.amberLight
@@ -325,11 +371,13 @@ const EmployeeInfoCard = memo(function EmployeeInfoCard({
     ? `${(employee.lat as number).toFixed(5)}, ${(employee.lng as number).toFixed(5)}`
     : '—';
 
-  const cardBottom = 100 + bottomOffset;
+  // [RD1] Show firebase_uid in debug builds so it's easy to cross-reference
+  // RTDB nodes without touching release builds.
+  const rtdbKey = getRtdbKey(employee);
 
   return (
     <Animated.View
-      style={[cs.card, { bottom: cardBottom, transform: [{ translateY: slideAnim }] }]}
+      style={[cs.card, { bottom: 100 + bottomOffset, transform: [{ translateY: slideAnim }] }]}
       accessible
       accessibilityViewIsModal
       accessibilityLabel={`Employee details for ${displayName}`}
@@ -349,6 +397,12 @@ const EmployeeInfoCard = memo(function EmployeeInfoCard({
           <Text style={cs.name} numberOfLines={1} ellipsizeMode="tail">{displayName}</Text>
           {!!employee.role && (
             <Text style={cs.role} numberOfLines={1}>{employee.role}</Text>
+          )}
+          {/* [RD1] Dev-only UID label — helps trace RTDB nodes during QA */}
+          {__DEV__ && (
+            <Text style={cs.devUid} numberOfLines={1} ellipsizeMode="middle">
+              uid: {rtdbKey}
+            </Text>
           )}
         </View>
 
@@ -378,7 +432,6 @@ const EmployeeInfoCard = memo(function EmployeeInfoCard({
 
       <View style={cs.divider} />
 
-      {/* Info rows */}
       <View style={cs.rows}>
         <InfoRow
           icon={<MapPin size={14} color={C.blue} />}
@@ -398,7 +451,6 @@ const EmployeeInfoCard = memo(function EmployeeInfoCard({
         )}
       </View>
 
-      {/* Focus CTA — only when valid coords exist */}
       {hasCoords && (
         <TouchableOpacity
           style={cs.focusBtn}
@@ -426,29 +478,31 @@ const cs = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     borderWidth: 0.5, borderColor: C.border,
   },
-  header:       { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  avatar:       { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  avatarText:   { fontSize: 18, fontWeight: '700' },
-  headerMid:    { flex: 1, minWidth: 0 },
-  name:         { fontSize: 15, fontWeight: '700', color: C.ink },
-  role:         { fontSize: 11, color: C.muted, marginTop: 2 },
-  pill:         { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999 },
-  pillText:     { fontSize: 11, fontWeight: '700' },
-  closeBtn:     { width: 28, height: 28, borderRadius: 8, backgroundColor: '#f3f0ec', alignItems: 'center', justifyContent: 'center', marginLeft: 2 },
-  divider:      { height: 0.5, backgroundColor: C.border, marginVertical: 14 },
-  rows:         { gap: 10 },
-  row:          { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  iconPill:     { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  rowTexts:     { flex: 1, minWidth: 0 },
-  rowLabel:     { fontSize: 10, color: C.muted, marginBottom: 1 },
-  rowValue:     { fontSize: 12, fontWeight: '600', color: C.ink },
-  monoValue:    { fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 10 },
-  batteryBar:   { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  batteryTrack: { flex: 1, flexDirection: 'row', height: 4, backgroundColor: '#f0ede8', borderRadius: 2, overflow: 'hidden' },
-  batteryFill:  { height: 4, borderRadius: 2 },
-  batteryPct:   { fontSize: 11, fontWeight: '700', minWidth: 28, textAlign: 'right' },
-  focusBtn:     { marginTop: 16, backgroundColor: C.tealDark, borderRadius: 12, paddingVertical: 11, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
-  focusBtnText: { color: C.tealLight, fontWeight: '700', fontSize: 13 },
+  header:    { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  avatar:    { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  avatarText:{ fontSize: 18, fontWeight: '700' },
+  headerMid: { flex: 1, minWidth: 0 },
+  name:      { fontSize: 15, fontWeight: '700', color: C.ink },
+  role:      { fontSize: 11, color: C.muted, marginTop: 2 },
+  // [RD1] dev-only style — never shown in production builds
+  devUid:    { fontSize: 9, color: C.muted, marginTop: 1, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+  pill:      { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999 },
+  pillText:  { fontSize: 11, fontWeight: '700' },
+  closeBtn:  { width: 28, height: 28, borderRadius: 8, backgroundColor: '#f3f0ec', alignItems: 'center', justifyContent: 'center', marginLeft: 2 },
+  divider:   { height: 0.5, backgroundColor: C.border, marginVertical: 14 },
+  rows:      { gap: 10 },
+  row:       { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  iconPill:  { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  rowTexts:  { flex: 1, minWidth: 0 },
+  rowLabel:  { fontSize: 10, color: C.muted, marginBottom: 1 },
+  rowValue:  { fontSize: 12, fontWeight: '600', color: C.ink },
+  monoValue: { fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 10 },
+  batteryBar:  { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  batteryTrack:{ flex: 1, flexDirection: 'row', height: 4, backgroundColor: '#f0ede8', borderRadius: 2, overflow: 'hidden' },
+  batteryFill: { height: 4, borderRadius: 2 },
+  batteryPct:  { fontSize: 11, fontWeight: '700', minWidth: 28, textAlign: 'right' },
+  focusBtn:    { marginTop: 16, backgroundColor: C.tealDark, borderRadius: 12, paddingVertical: 11, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
+  focusBtnText:{ color: C.tealLight, fontWeight: '700', fontSize: 13 },
 });
 
 // ─── LiveMapScreen ────────────────────────────────────────────────────────────
@@ -456,6 +510,10 @@ const cs = StyleSheet.create({
 function LiveMapScreenInner() {
   const insets   = useSafeAreaInsets();
   const isOnline = useOfflineStore(s => s.isOnline);
+
+  // [RD4] Read focusId (now a firebaseUid) from route params
+  const route    = useRoute<RouteProp<LiveMapParams, 'LiveMap'>>();
+  const focusId  = route.params?.focusId ?? null;
 
   // ── Realtime subscription ────────────────────────────────────
   const { attach, detach } = useAdminRealtimeMap();
@@ -467,9 +525,7 @@ function LiveMapScreenInner() {
         StatusBar.setBackgroundColor('transparent');
       }
       StatusBar.setBarStyle('dark-content');
-
       attach();
-
       return () => {
         if (Platform.OS === 'android') {
           StatusBar.setTranslucent(false);
@@ -483,6 +539,7 @@ function LiveMapScreenInner() {
 
   // ── Refs ─────────────────────────────────────────────────────
   const mapRef      = useRef<MapView>(null);
+  // [RD5] Tracks firebaseUids (RTDB path keys) for new-employee pulse
   const prevIdsRef  = useRef<Set<string>>(new Set());
   const newIdTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
@@ -491,8 +548,10 @@ function LiveMapScreenInner() {
   const [selectedEmployee, setSelectedEmployee] = useState<LiveEmployee | null>(null);
   const [newIds,           setNewIds]           = useState<Set<string>>(new Set());
   const [mapReady,         setMapReady]         = useState(false);
+  // Guard: focusId deep-link fires at most once per mount
+  const focusAppliedRef = useRef(false);
 
-  // ── Store selectors (stable references) ──────────────────────
+  // ── Store selectors ───────────────────────────────────────────
   const liveEmployees = useLocationStore(s => s.liveEmployees);
   const seeding       = useLocationStore(s => s.seeding);
   const getActive     = useLocationStore(s => s.getActiveEmployees);
@@ -503,9 +562,12 @@ function LiveMapScreenInner() {
   const staleEmployees  = useMemo(() => getStale(),  [liveEmployees, getStale]);
 
   // ── New-employee pulse ────────────────────────────────────────
+  // [RD5] Use getRtdbKey so a re-auth (new firebaseUid) triggers the pulse
   useEffect(() => {
-    const currentIds = new Set(allMarkers.map(e => safeEmployeeId(e)).filter(Boolean));
-    const incoming   = new Set<string>();
+    const currentIds = new Set(
+      allMarkers.map(e => getRtdbKey(e)).filter(Boolean),
+    );
+    const incoming = new Set<string>();
     currentIds.forEach(id => { if (!prevIdsRef.current.has(id)) incoming.add(id); });
     prevIdsRef.current = currentIds;
     if (incoming.size === 0) return;
@@ -521,19 +583,24 @@ function LiveMapScreenInner() {
     newIdTimers.current.push(t);
   }, [allMarkers]);
 
-  // Clear all pending timers on unmount
+  // Clear all pending pulse timers on unmount
   useEffect(() => () => {
     newIdTimers.current.forEach(clearTimeout);
   }, []);
 
   // ── Keep selected employee data fresh ────────────────────────
+  // [RD6] Look up by getRtdbKey (firebaseUid) matching the store's key scheme
   useEffect(() => {
     if (!selectedEmployee) return;
-    const id      = safeEmployeeId(selectedEmployee);
-    const updated = id ? liveEmployees[id] : undefined;
-    if (updated) setSelectedEmployee(updated);
-    // If the employee is removed from the store, clear the selection
-    else if (id && !liveEmployees[id] && !seeding) setSelectedEmployee(null);
+    const rtdbKey = getRtdbKey(selectedEmployee);
+    const updated = rtdbKey ? liveEmployees[rtdbKey] : undefined;
+    if (updated) {
+      setSelectedEmployee(updated);
+    } else if (rtdbKey && !liveEmployees[rtdbKey] && !seeding) {
+      // Employee removed from store (went offline / de-registered) — clear card
+      setSelectedEmployee(null);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveEmployees, seeding]); // intentionally omit selectedEmployee to avoid loop
 
   // ── Map actions ───────────────────────────────────────────────
@@ -559,23 +626,45 @@ function LiveMapScreenInner() {
 
   const handleSelectFromList = useCallback((emp: LiveEmployee) => {
     setShowList(false);
-    // Let the list panel finish its exit animation before showing card
     const t = setTimeout(() => {
       setSelectedEmployee(emp);
       focusEmployee(emp);
-    }, 150);
-    return () => clearTimeout(t); // safe but timeout fires before cleanup in practice
+    }, LIST_EXIT_DELAY_MS);
+    // Cleanup: if component unmounts before timer fires, cancel it
+    return () => clearTimeout(t);
   }, [focusEmployee]);
 
   const handleMapPress = useCallback(() => setSelectedEmployee(null), []);
+
   const handleMapReady = useCallback(() => setMapReady(true), []);
+
+  // ── focusId deep-link — auto-select on mount ──────────────────
+  // [RD4] focusId is now a firebaseUid; look it up directly in liveEmployees
+  // (which is also keyed by firebaseUid). Fire at most once per mount so
+  // subsequent store ticks don't re-trigger the focus animation.
+  useEffect(() => {
+    if (!mapReady || !focusId || focusAppliedRef.current) return;
+
+    // The store may not have seeded yet — wait until seeding is false and
+    // the target key exists
+    if (seeding) return;
+
+    const target = liveEmployees[focusId]; // [RD3] direct key lookup
+    if (!target) {
+      if (__DEV__) console.warn('[LiveMapScreen] focusId not found in store:', focusId);
+      return;
+    }
+
+    focusAppliedRef.current = true;
+    setSelectedEmployee(target);
+    focusEmployee(target);
+  }, [mapReady, focusId, liveEmployees, seeding, focusEmployee]);
 
   // ── Layout offsets ────────────────────────────────────────────
   const topOffset       = insets.top + 12;
   const bottomBarBottom = 28 + insets.bottom;
 
   // ── Reduce-motion awareness ───────────────────────────────────
-  // Passed down as prop if needed; currently affects EmployeeMarker.
   const [reduceMotion, setReduceMotion] = useState(false);
   useEffect(() => {
     AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion).catch(() => {});
@@ -598,13 +687,14 @@ function LiveMapScreenInner() {
         accessibilityLabel="Employee live location map"
       >
         {mapReady && allMarkers.map(emp => {
-          const id = safeEmployeeId(emp);
-          if (!id) return null; // skip employees with missing IDs
+          // [RD1] Use getRtdbKey for React key — matches the RTDB node key
+          const rtdbKey = getRtdbKey(emp);
+          if (!rtdbKey) return null; // skip records with no usable key
           return (
             <EmployeeMarker
-              key={id}
+              key={rtdbKey}
               employee={emp}
-              isNew={newIds.has(id)}
+              isNew={newIds.has(rtdbKey)}   // [RD5]
               onPress={handleMarkerPress}
             />
           );
@@ -624,7 +714,7 @@ function LiveMapScreenInner() {
         </View>
       )}
 
-      {/* Seeding banner — offset below offline pill when both are visible */}
+      {/* Seeding banner */}
       {seeding && (
         <View
           style={[s.seedingBanner, { top: !isOnline ? topOffset + 40 : topOffset }]}
@@ -637,7 +727,7 @@ function LiveMapScreenInner() {
         </View>
       )}
 
-      {/* Empty state — only once seeding is done */}
+      {/* Empty state */}
       {!seeding && allMarkers.length === 0 && (
         <View style={s.emptyState} pointerEvents="none">
           <View style={s.emptyIconWrap}>
@@ -745,8 +835,8 @@ const s = StyleSheet.create({
   emptyTitle:    { fontSize: 16, fontWeight: '700', color: C.ink },
   emptySubtitle: { fontSize: 13, color: C.muted, textAlign: 'center', maxWidth: 240, lineHeight: 19 },
 
-  bottomBar: { position: 'absolute', left: 14, right: 14, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  legendPill: {
+  bottomBar:   { position: 'absolute', left: 14, right: 14, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  legendPill:  {
     flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: C.surface,
     paddingHorizontal: 14, paddingVertical: 10,

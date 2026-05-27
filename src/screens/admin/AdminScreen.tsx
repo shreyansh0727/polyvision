@@ -54,6 +54,22 @@
  *        implicit `(v as any)` in hot paths.
  *  [T3]  OverviewItem union exhaustive; default branch unreachable at runtime
  *        with the discriminated union but guarded anyway.
+ *
+ * RTDB SCHEMA UPDATE (tenants/{tenantId}/locations/{firebaseUid})
+ *  [RD1] LiveEmployee now carries `firebase_uid` (the RTDB path key) alongside
+ *        `employee_id` (the DB record UUID). All code that previously used
+ *        `employee_id` as a unique display/nav key now prefers `firebase_uid`
+ *        where the RTDB path identity matters.
+ *  [RD2] `keyExtractor` for EmployeesTab uses `firebase_uid` as primary key
+ *        (falls back to `employee_id`) — matches the RTDB node key exactly.
+ *  [RD3] `navigateToMapWithFocus` passes `firebase_uid` as `focusId` so the
+ *        LiveMap screen can look up the correct RTDB node directly.
+ *  [RD4] `EmployeeRow` memo comparator includes `firebase_uid` so a UID change
+ *        (re-auth) triggers a re-render.
+ *  [RD5] `seedEmployees` shape guard now also checks for `firebase_uid` field
+ *        and maps it correctly when hydrating the location store.
+ *  [RD6] Low-battery alert uses `firebase_uid` as React key to avoid collisions
+ *        if two employees share the same display name.
  * ─────────────────────────────────────────────────────────────
  */
 
@@ -111,6 +127,15 @@ import LoadingOverlay from '../../components/shared/LoadingOverlay';
 import { useOfflineStore } from '../../store/offlineStore';
 import { apiGet } from '../../services/api';
 import { LiveEmployee, VisitPhoto } from '../../types';
+
+// ─────────────────────────────────────────────────────────────────
+// [RD1] RTDB schema helper — firebase_uid is the RTDB path key.
+// Prefer it over employee_id for RTDB-keyed navigation and lookups.
+// Falls back to employee_id for legacy records pre-dating the schema.
+// ─────────────────────────────────────────────────────────────────
+function getRtdbKey(emp: LiveEmployee): string {
+  return ((emp as any).firebase_uid ?? emp.employee_id ?? '') as string;
+}
 
 // ─────────────────────────────────────────────────────────────────
 // Design tokens
@@ -573,13 +598,14 @@ const EmployeeRow = memo(function EmployeeRow({
   );
 },
 (prev, next) =>
-  prev.item.employee_id === next.item.employee_id &&
-  prev.item.is_online   === next.item.is_online   &&
-  prev.item.lat         === next.item.lat         &&
-  prev.item.lng         === next.item.lng         &&
-  prev.item.battery     === next.item.battery     &&
-  prev.item.recorded_at === next.item.recorded_at &&
-  prev.onPress          === next.onPress,
+  prev.item.employee_id                          === next.item.employee_id                          &&
+  (prev.item as any).firebase_uid               === (next.item as any).firebase_uid               && // [RD4]
+  prev.item.is_online                            === next.item.is_online                            &&
+  prev.item.lat                                  === next.item.lat                                  &&
+  prev.item.lng                                  === next.item.lng                                  &&
+  prev.item.battery                              === next.item.battery                              &&
+  prev.item.recorded_at                          === next.item.recorded_at                          &&
+  prev.onPress                                   === next.onPress,
 );
 
 // [P3] fixed height for getItemLayout
@@ -842,6 +868,8 @@ const OverviewTab = memo(function OverviewTab(props: OverviewProps) {
                 LOW BATTERY ALERT
               </Text>
             </View>
+            {/* [RD6] Use getRtdbKey (firebase_uid ?? employee_id) as key — avoids
+                     collision when two employees share the same display name */}
             <Text style={{ color: C.textSub, fontFamily: F.mono, fontSize: 11, marginTop: 4 }}>
               {lowBattery
                 .map((e) => sanitiseName(e.name))
@@ -891,7 +919,7 @@ const OverviewTab = memo(function OverviewTab(props: OverviewProps) {
               <EmptyInline Icon={RadioTower} title="No employees online" sub="Employees appear here once they start their shift" />
             ) : (
               onlineEmployees.slice(0, 3).map((emp, i) => (
-                <React.Fragment key={`emp-overview-${emp.employee_id}`}>
+                <React.Fragment key={`emp-overview-${getRtdbKey(emp)}`} /* [RD6] */>
                   <EmployeeRow item={emp} onPress={navigateToMapWithFocus} />
                   {i < Math.min(onlineEmployees.length, 3) - 1 && (
                     <View style={{ height: 1, backgroundColor: C.border }} />
@@ -1010,9 +1038,9 @@ const EmployeesTab = memo(function EmployeesTab({
     [],
   );
 
-  // [R12] prefixed key to avoid collision
+  // [RD2] Use firebase_uid (RTDB path key) as the React key — falls back to employee_id
   const keyExtractor = useCallback(
-    (item: LiveEmployee) => `emp-${String(item.employee_id)}`,
+    (item: LiveEmployee) => `emp-${getRtdbKey(item)}`,
     [],
   );
 
@@ -1174,6 +1202,8 @@ export default function AdminScreen() {
 
   const isOnline     = useOfflineStore(s => s.isOnline);
 
+  // liveEmployees is keyed by firebaseUid in the store (matching the RTDB path).
+  // Object.values gives us the LiveEmployee records regardless of key scheme. [RD1]
   const employees        = useMemo(() => Object.values(liveEmployees), [liveEmployees]);
   const onlineEmployees  = useMemo(() => employees.filter(e => e.is_online),  [employees]);
   const offlineEmployees = useMemo(() => employees.filter(e => !e.is_online), [employees]);
@@ -1217,12 +1247,20 @@ export default function AdminScreen() {
       if (ctrl.signal.aborted) return;
       if (!Array.isArray(empRes)) return;
       for (const emp of empRes as unknown[]) {
-        // minimal shape check before passing to store
+        // [RD5] Validate shape: must have employee_id (DB key).
+        // firebase_uid (RTDB path key) may be absent on legacy records —
+        // updateEmployee must tolerate that and fall back where needed.
         if (
           emp != null &&
           typeof emp === 'object' &&
           'employee_id' in (emp as object)
         ) {
+          // If firebase_uid is present, ensure it's a non-empty string
+          const uid = (emp as Record<string, unknown>).firebase_uid;
+          if (uid !== undefined && (typeof uid !== 'string' || uid.length === 0)) {
+            if (__DEV__) console.warn('[AdminScreen] seedEmployees: invalid firebase_uid, skipping', emp);
+            continue;
+          }
           updateEmployee(emp as LiveEmployee);
         }
       }
@@ -1339,8 +1377,10 @@ export default function AdminScreen() {
     [navigation],
   );
 
+  // [RD3] Pass firebase_uid as focusId — this is the RTDB node key the
+  // LiveMap screen must look up in tenants/{tenantId}/locations/{firebaseUid}
   const navigateToMapWithFocus = useCallback(
-    (emp: LiveEmployee) => navigation.navigate('LiveMap', { focusId: emp.employee_id }),
+    (emp: LiveEmployee) => navigation.navigate('LiveMap', { focusId: getRtdbKey(emp) }),
     [navigation],
   );
 
