@@ -1,6 +1,6 @@
 // src/hooks/useInternalAppUpdate.ts
-import { useEffect, useState, useCallback } from 'react';
-import { Alert, Linking } from 'react-native';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { Alert, Linking, AppState, AppStateStatus } from 'react-native';
 import DeviceInfo from 'react-native-device-info';
 import { apiGet } from '../services/api';
 
@@ -22,6 +22,7 @@ interface UpdateState {
 function cmpSemver(a: string, b: string): number {
   const pa = a.split('.').map(n => parseInt(n, 10));
   const pb = b.split('.').map(n => parseInt(n, 10));
+
   for (let i = 0; i < 3; i += 1) {
     const da = pa[i] || 0;
     const db = pb[i] || 0;
@@ -33,16 +34,31 @@ function cmpSemver(a: string, b: string): number {
 
 export function useInternalAppUpdate() {
   const [checking, setChecking] = useState(false);
-  const [update, setUpdate]     = useState<UpdateState | null>(null);
+  const [update, setUpdate] = useState<UpdateState | null>(null);
 
-  const checkForUpdate = useCallback(async () => {
-    if (checking) return;
+  const inFlightRef = useRef(false);
+  const lastCheckAtRef = useRef(0);
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+
+  const checkForUpdate = useCallback(async (opts?: { force?: boolean }) => {
+    const force = opts?.force === true;
+    const now = Date.now();
+
+    if (inFlightRef.current) return;
+
+    // Prevent accidental spam: skip if checked within last 60s unless forced
+    if (!force && now - lastCheckAtRef.current < 60_000) {
+      return;
+    }
+
+    inFlightRef.current = true;
     setChecking(true);
-    try {
-      const currentVersion = DeviceInfo.getVersion(); // e.g. "1.0.0"
 
-      // NOTE: leading slash so it hits /ota/app/version on your API
+    try {
+      const currentVersion = DeviceInfo.getVersion();
       const res = await apiGet<VersionResponse>('/ota/app/version');
+
+      lastCheckAtRef.current = Date.now();
 
       if (!res?.latestVersion || !res?.apkUrl) {
         setUpdate(null);
@@ -51,16 +67,15 @@ export function useInternalAppUpdate() {
 
       const needsUpdate = cmpSemver(res.latestVersion, currentVersion) > 0;
 
-      let force = false;
+      let forceUpdate = false;
       if (res.minSupportedVersion) {
-        // force update if current < minSupportedVersion
-        force = cmpSemver(currentVersion, res.minSupportedVersion) < 0;
+        forceUpdate = cmpSemver(currentVersion, res.minSupportedVersion) < 0;
       }
 
       if (needsUpdate) {
         setUpdate({
           needsUpdate: true,
-          force,
+          force: forceUpdate,
           latestVersion: res.latestVersion,
           notes: res.notes ?? null,
           apkUrl: res.apkUrl,
@@ -71,26 +86,41 @@ export function useInternalAppUpdate() {
     } catch (e) {
       console.warn('useInternalAppUpdate: failed to check', e);
     } finally {
+      inFlightRef.current = false;
       setChecking(false);
     }
-  }, [checking]);
+  }, []);
 
   const openDownload = useCallback(() => {
     if (!update?.apkUrl) {
       Alert.alert('Update', 'Download link not available.');
       return;
     }
-    // Basic guard to avoid weird schemes
+
     const url = update.apkUrl;
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       Alert.alert('Update', 'Invalid download URL.');
       return;
     }
+
     Linking.openURL(url);
   }, [update]);
 
   useEffect(() => {
-    checkForUpdate();
+    checkForUpdate({ force: true });
+
+    const sub = AppState.addEventListener('change', (nextState) => {
+      const wasBackground =
+        appStateRef.current === 'background' || appStateRef.current === 'inactive';
+
+      if (wasBackground && nextState === 'active') {
+        checkForUpdate({ force: false });
+      }
+
+      appStateRef.current = nextState;
+    });
+
+    return () => sub.remove();
   }, [checkForUpdate]);
 
   return { checking, update, checkForUpdate, openDownload };
