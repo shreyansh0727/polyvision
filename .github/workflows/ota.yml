@@ -7,11 +7,14 @@ on:
       - 'src/**'
       - 'index.js'
       - 'package.json'
+      - 'package-lock.json'
       - 'assets/**'
       - 'App.tsx'
+      - '.github/workflows/ota.yml'
+  workflow_dispatch:
 
 concurrency:
-  group: ota-${{ github.ref }}
+  group: ota-${{ github.ref }}-android
   cancel-in-progress: true
 
 env:
@@ -21,10 +24,13 @@ jobs:
   ota-android:
     name: Build & Deploy OTA Bundle
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
@@ -36,15 +42,18 @@ jobs:
 
       - name: Generate OTA version
         id: version
+        shell: bash
         run: |
-          VERSION=$(date +'%Y%m%d%H%M')
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          VERSION="$(date +'%Y%m%d%H%M')-${GITHUB_SHA::7}"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Embed OTA version into config
+        shell: bash
         run: |
           sed -i "s|OTA_VERSION:.*|OTA_VERSION: '${{ steps.version.outputs.VERSION }}',|g" src/Config.ts || true
 
       - name: Build Android JS bundle
+        shell: bash
         run: |
           mkdir -p bundle/android
           npx react-native bundle \
@@ -55,37 +64,56 @@ jobs:
             --assets-dest bundle/android/
 
       - name: Create bundle metadata
+        shell: bash
         run: |
+          BUNDLE_FILE="bundle/android/index.android.bundle"
+          BUNDLE_MD5=$(md5sum "$BUNDLE_FILE" | awk '{print $1}')
+          BUNDLE_SHA256=$(sha256sum "$BUNDLE_FILE" | awk '{print $1}')
+          BUNDLE_SIZE=$(stat -c%s "$BUNDLE_FILE")
+
           cat > bundle/android/bundle.json << JSON
           {
             "version": "${{ steps.version.outputs.VERSION }}",
             "platform": "android",
             "commit": "${{ github.sha }}",
-            "built_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            "branch": "${{ github.ref_name }}",
+            "built_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "bundle_file": "index.android.bundle",
+            "md5": "$BUNDLE_MD5",
+            "sha256": "$BUNDLE_SHA256",
+            "size": $BUNDLE_SIZE
           }
           JSON
 
       - name: Zip bundle
+        shell: bash
         run: |
           cd bundle/android
           zip -r ../../ota-android-${{ steps.version.outputs.VERSION }}.zip .
 
-      - name: Upload bundle to GCP backend
+      - name: Upload bundle to OTA backend
         env:
           OTA_DEPLOY_URL: ${{ secrets.OTA_DEPLOY_URL }}
-          OTA_SECRET:     ${{ secrets.OTA_SECRET }}
+          OTA_SECRET: ${{ secrets.OTA_SECRET }}
+        shell: bash
         run: |
-          HTTP_STATUS=$(curl -s -o /tmp/ota_response.txt -w "%{http_code}" \
+          HTTP_STATUS=$(curl -s -o /tmp/ota_response.json -w "%{http_code}" \
             -X POST "$OTA_DEPLOY_URL" \
             -H "Authorization: Bearer $OTA_SECRET" \
             -F "bundle=@ota-android-${{ steps.version.outputs.VERSION }}.zip" \
             -F "version=${{ steps.version.outputs.VERSION }}" \
-            -F "platform=android")
-          cat /tmp/ota_response.txt
-          if [ "$HTTP_STATUS" -ne 200 ]; then
+            -F "platform=android" \
+            -F "commit=${{ github.sha }}" \
+            -F "branch=${{ github.ref_name }}" \
+            -F "metadata=@bundle/android/bundle.json;type=application/json")
+
+          cat /tmp/ota_response.json
+
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
             echo "❌ OTA deploy failed with HTTP $HTTP_STATUS"
             exit 1
           fi
+
           echo "✅ OTA bundle deployed (v${{ steps.version.outputs.VERSION }})"
 
       - name: Save bundle as artifact
@@ -93,16 +121,20 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ota-android-${{ steps.version.outputs.VERSION }}
-          path: ota-android-${{ steps.version.outputs.VERSION }}.zip
+          path: |
+            ota-android-${{ steps.version.outputs.VERSION }}.zip
+            bundle/android/bundle.json
           retention-days: 30
 
       - name: Write job summary
         if: always()
+        shell: bash
         run: |
-          echo "## OTA Bundle Summary" >> $GITHUB_STEP_SUMMARY
-          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| Version | \`${{ steps.version.outputs.VERSION }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Platform | Android |" >> $GITHUB_STEP_SUMMARY
-          echo "| Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "## OTA Bundle Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Version | \`${{ steps.version.outputs.VERSION }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commit | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Platform | Android |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Branch | \`${{ github.ref_name }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Artifact | \`ota-android-${{ steps.version.outputs.VERSION }}.zip\` |" >> "$GITHUB_STEP_SUMMARY"
