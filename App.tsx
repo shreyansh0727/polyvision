@@ -1,12 +1,21 @@
 // App.tsx
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  StyleSheet, View, StatusBar, Text, TouchableOpacity,
-  Modal, Pressable, Animated, ScrollView,
+  StyleSheet,
+  View,
+  StatusBar,
+  Text,
+  TouchableOpacity,
+  Modal,
+  Pressable,
+  Animated,
+  ScrollView,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getAuth, onAuthStateChanged } from '@react-native-firebase/auth';
+import { ArrowDownToLine, X, Layers } from 'lucide-react-native';
+
 import { useAuthStore } from './src/store/authStore';
 import Navigation from './src/navigation';
 import { useOtaUpdate } from './src/hooks/useOtaUpdate';
@@ -14,7 +23,16 @@ import { useNetworkMonitor } from './src/hooks/useNetworkMonitor';
 import { OfflineBanner } from './src/components/OfflineBanner';
 import { useInternalAppUpdate } from './src/hooks/useInternalAppUpdate';
 import { MC, MF } from './src/navigation/AppTheme';
-import { ArrowDownToLine, X, Layers } from 'lucide-react-native';
+
+type InternalUpdate = NonNullable<ReturnType<typeof useInternalAppUpdate>['update']>;
+
+function parseNotes(notes?: string | null): string[] {
+  if (!notes) return [];
+  return notes
+    .split(/\n|;\s*/)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
 
 // ─── Bottom-sheet update popup ───────────────────────────────────────────────
 function UpdateSheet({
@@ -24,14 +42,16 @@ function UpdateSheet({
   onDismiss,
 }: {
   visible: boolean;
-  update: NonNullable<ReturnType<typeof useInternalAppUpdate>['update']>;
+  update: InternalUpdate;
   onDownload: () => void;
   onDismiss: () => void;
 }) {
   const insets = useSafeAreaInsets();
-  const slideY = useRef(new Animated.Value(400)).current;
+  const slideY = useRef(new Animated.Value(420)).current;
 
   useEffect(() => {
+    let mounted = true;
+
     if (visible) {
       Animated.spring(slideY, {
         toValue: 0,
@@ -39,23 +59,27 @@ function UpdateSheet({
         damping: 22,
         stiffness: 180,
       }).start();
-    } else {
-      slideY.setValue(400);
+    } else if (mounted) {
+      slideY.setValue(420);
     }
-  }, [visible]);
+
+    return () => {
+      mounted = false;
+      slideY.stopAnimation();
+    };
+  }, [visible, slideY]);
 
   const dismiss = () => {
     Animated.timing(slideY, {
-      toValue: 400,
+      toValue: 420,
       duration: 220,
       useNativeDriver: true,
-    }).start(onDismiss);
+    }).start(({ finished }) => {
+      if (finished) onDismiss();
+    });
   };
 
-  // Parse notes into bullet array (split on newline or "; ")
-  const noteLines: string[] = update.notes
-    ? update.notes.split(/\n|;\s*/).filter(Boolean)
-    : [];
+  const noteLines = useMemo(() => parseNotes(update.notes), [update.notes]);
 
   return (
     <Modal
@@ -69,66 +93,81 @@ function UpdateSheet({
         <Animated.View
           style={[
             styles.sheet,
-            { paddingBottom: insets.bottom + 12, transform: [{ translateY: slideY }] },
+            {
+              paddingBottom: insets.bottom + 12,
+              transform: [{ translateY: slideY }],
+            },
           ]}
         >
-          {/* Prevent backdrop tap from passing through */}
           <Pressable onPress={() => {}}>
-
-            {/* Handle */}
             <View style={styles.sheetHandle} />
 
-            {/* Header row */}
             <View style={styles.sheetHeader}>
               <View style={styles.sheetIconWrap}>
                 <Layers size={20} color={MC.blue} />
               </View>
+
               <View style={styles.sheetTitles}>
                 <Text style={styles.sheetTitle}>New build available</Text>
                 <Text style={styles.sheetSub}>
-                  
-                    ? `v-this → v${update.latestVersion}`
-                    : `v${update.latestVersion}`
+                  {update.minSupportedVersion
+                    ? `Latest v${update.latestVersion} • Minimum supported v${update.minSupportedVersion}`
+                    : `v${update.latestVersion} is ready to download`}
                 </Text>
               </View>
-              <TouchableOpacity style={styles.sheetCloseBtn} onPress={dismiss} hitSlop={8}>
+
+              <TouchableOpacity
+                style={styles.sheetCloseBtn}
+                onPress={dismiss}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss update sheet"
+              >
                 <X size={13} color={MC.textSub} />
               </TouchableOpacity>
             </View>
 
-            {/* Release notes */}
             {noteLines.length > 0 && (
               <View style={styles.notesBox}>
-                <Text style={styles.notesLabel}>What's new</Text>
+                <Text style={styles.notesLabel}>What&apos;s new</Text>
                 <ScrollView
-                  style={{ maxHeight: 120 }}
+                  style={styles.notesScroll}
                   showsVerticalScrollIndicator={false}
                   nestedScrollEnabled
                 >
                   {noteLines.map((line, i) => (
-                    <View key={i} style={styles.noteRow}>
+                    <View key={`${line}-${i}`} style={styles.noteRow}>
                       <View style={styles.noteDot} />
-                      <Text style={styles.noteText}>{line.trim()}</Text>
+                      <Text style={styles.noteText}>{line}</Text>
                     </View>
                   ))}
                 </ScrollView>
               </View>
             )}
 
-            {/* CTA buttons */}
             <TouchableOpacity
               style={styles.downloadBtn}
-              onPress={() => { dismiss(); onDownload(); }}
+              onPress={() => {
+                dismiss();
+                onDownload();
+              }}
               activeOpacity={0.88}
+              accessibilityRole="button"
+              accessibilityLabel="Download APK"
             >
               <ArrowDownToLine size={15} color={MC.bg} />
               <Text style={styles.downloadBtnText}>Download APK</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.laterBtn} onPress={dismiss} activeOpacity={0.6}>
+            <TouchableOpacity
+              style={styles.laterBtn}
+              onPress={dismiss}
+              activeOpacity={0.6}
+              accessibilityRole="button"
+              accessibilityLabel="Remind me later"
+            >
               <Text style={styles.laterBtnText}>Remind me later</Text>
             </TouchableOpacity>
-
           </Pressable>
         </Animated.View>
       </Pressable>
@@ -142,7 +181,7 @@ function UpdateBanner({
   onDownload,
   onDismiss,
 }: {
-  update: NonNullable<ReturnType<typeof useInternalAppUpdate>['update']>;
+  update: InternalUpdate;
   onDownload: () => void;
   onDismiss: () => void;
 }) {
@@ -151,18 +190,35 @@ function UpdateBanner({
       <View style={styles.bannerIconWrap}>
         <ArrowDownToLine size={13} color={MC.bg} />
       </View>
+
       <View style={styles.bannerTextWrap}>
         <Text style={styles.bannerTag}>New build</Text>
         <Text style={styles.bannerVersion} numberOfLines={1}>
           {update.latestVersion ? `v${update.latestVersion} available` : 'Update available'}
         </Text>
       </View>
-      <TouchableOpacity style={styles.bannerBtn} onPress={onDownload} activeOpacity={0.85}>
+
+      <TouchableOpacity
+        style={styles.bannerBtn}
+        onPress={onDownload}
+        activeOpacity={0.85}
+        accessibilityRole="button"
+        accessibilityLabel="Download app update"
+      >
         <Text style={styles.bannerBtnText}>Update</Text>
       </TouchableOpacity>
-      <TouchableOpacity style={styles.bannerDismiss} onPress={onDismiss} hitSlop={8}>
-        <X size={12} color={`${MC.bg}99`} />
-      </TouchableOpacity>
+
+      {!update.force && (
+        <TouchableOpacity
+          style={styles.bannerDismiss}
+          onPress={onDismiss}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Dismiss update banner"
+        >
+          <X size={12} color={`${MC.bg}99`} />
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -185,10 +241,10 @@ export default function App() {
       await useAuthStore.getState().loadStoredAuth();
       setFirebaseReady(true);
     });
+
     return () => unsub();
   }, []);
 
-  // Re-show popup whenever a new version is detected
   useEffect(() => {
     if (appUpdate?.latestVersion) {
       setPopupDismissed(false);
@@ -198,18 +254,17 @@ export default function App() {
 
   if (!firebaseReady) return null;
 
-  const showUpdate = !!appUpdate?.needsUpdate && !appUpdate.force;
-  const showPopup  = showUpdate && !popupDismissed;
+  const showUpdate = !!appUpdate?.needsUpdate && !appUpdate?.force;
+  const showPopup = showUpdate && !popupDismissed;
   const showBanner = showUpdate && popupDismissed && !bannerDismissed;
 
   return (
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaProvider>
         <View style={styles.root}>
-          <StatusBar barStyle="light-content" backgroundColor="#020617" />
+          <StatusBar barStyle="light-content" backgroundColor={MC.bg} />
 
-          {/* Slim banner — shown after popup is dismissed */}
-          {showBanner && (
+          {showBanner && appUpdate && (
             <UpdateBanner
               update={appUpdate}
               onDownload={openDownload}
@@ -220,8 +275,7 @@ export default function App() {
           <OfflineBanner />
           <Navigation />
 
-          {/* Bottom-sheet popup — shown on first detection */}
-          {showUpdate && (
+          {showUpdate && appUpdate && (
             <UpdateSheet
               visible={showPopup}
               update={appUpdate}
@@ -230,7 +284,6 @@ export default function App() {
             />
           )}
 
-          {/* Force-update blocking overlay */}
           {appUpdate?.force && (
             <View style={styles.forceOverlay}>
               <View style={styles.forceCard}>
@@ -238,7 +291,20 @@ export default function App() {
                 <Text style={styles.forceSub}>
                   Please install the latest build to continue using the app.
                 </Text>
-                <TouchableOpacity style={styles.forceBtn} onPress={openDownload} activeOpacity={0.9}>
+
+                {!!appUpdate.latestVersion && (
+                  <Text style={styles.forceMeta}>
+                    Latest version: v{appUpdate.latestVersion}
+                  </Text>
+                )}
+
+                <TouchableOpacity
+                  style={styles.forceBtn}
+                  onPress={openDownload}
+                  activeOpacity={0.9}
+                  accessibilityRole="button"
+                  accessibilityLabel="Download required update"
+                >
                   <Text style={styles.forceBtnText}>Download update</Text>
                 </TouchableOpacity>
               </View>
@@ -304,6 +370,7 @@ const styles = StyleSheet.create({
     color: MC.textSub,
     fontFamily: MF.mono,
     marginTop: 3,
+    lineHeight: 16,
   },
   sheetCloseBtn: {
     width: 28,
@@ -331,6 +398,9 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: 'uppercase',
     marginBottom: 8,
+  },
+  notesScroll: {
+    maxHeight: 120,
   },
   noteRow: {
     flexDirection: 'row',
@@ -371,7 +441,11 @@ const styles = StyleSheet.create({
     fontFamily: MF.mono,
   },
   laterBtn: { alignItems: 'center', paddingVertical: 10 },
-  laterBtnText: { fontSize: 12, color: MC.textSub, fontFamily: MF.mono },
+  laterBtnText: {
+    fontSize: 12,
+    color: MC.textSub,
+    fontFamily: MF.mono,
+  },
 
   // ── Slim banner ──────────────────────────────────────────
   banner: {
@@ -447,6 +521,13 @@ const styles = StyleSheet.create({
   forceSub: {
     fontSize: 12,
     color: MC.textSub,
+    fontFamily: MF.mono,
+    marginBottom: 10,
+    lineHeight: 18,
+  },
+  forceMeta: {
+    fontSize: 11,
+    color: MC.textFaint,
     fontFamily: MF.mono,
     marginBottom: 16,
   },
