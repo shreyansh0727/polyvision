@@ -44,7 +44,7 @@ export function clearTokenCache() {
 
 // ── Axios instance ────────────────────────────────────────────────
 const api = axios.create({
-  baseURL: Config.API_URL ?? 'https://vns-track.de.r.appspot.com',
+  baseURL: Config.API_URL ?? 'https://886e-2401-4900-884b-67e4-fc85-d655-99d4-279b.ngrok-free.app',
   timeout: 12_000,
   headers: {
     'Content-Type': 'application/json',

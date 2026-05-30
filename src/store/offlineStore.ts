@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { NetInfo } from '@react-native-community/netinfo';
+import  NetInfo  from '@react-native-community/netinfo';
 
 interface QueuedRequest {
   id:        string;
