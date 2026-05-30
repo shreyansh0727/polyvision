@@ -5,19 +5,19 @@ import React, {
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   TextInput, Modal, ScrollView, Alert, ActivityIndicator,
-  KeyboardAvoidingView, Platform, Animated, RefreshControl,
+  KeyboardAvoidingView, Platform, Animated, RefreshControl, Switch,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
-  Phone, Search, Users, X, CloudOff, UserPlus, User,
+  Phone, Search, Users, X, CloudOff, UserPlus, User, Pencil, Trash2,
   type LucideIcon,
 } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AdminStackParamList } from '../../navigation/AdminTabs';
 import { MC, MF, avatarColor } from '../../navigation/AppTheme';
-import { apiGet, apiPost } from '../../services/api';
+import { apiGet, apiPost, apiDelete, apiPatch } from '../../services/api';
 import { useOfflineStore } from '../../store/offlineStore';
 
 type AdminNav = NativeStackNavigationProp<AdminStackParamList>;
@@ -41,7 +41,14 @@ interface CreateForm {
   role: 'employee';
 }
 
+interface EditForm {
+  name: string;
+  role: 'employee' | 'admin';
+  is_active: boolean;
+}
+
 type FormErrors = Partial<Record<keyof CreateForm, string>>;
+type EditErrors = Partial<Record<keyof EditForm, string>>;
 
 const EMPTY_FORM: CreateForm = {
   name: '',
@@ -163,10 +170,14 @@ const EmployeeRow = memo(function EmployeeRow({
   employee,
   index,
   onCall,
+  onEdit,
+  onDelete,
 }: {
   employee: Employee;
   index: number;
   onCall: (employee: Employee) => void;
+  onEdit: (employee: Employee) => void;
+  onDelete: (employee: Employee) => void;
 }) {
   const slideAnim = useRef(new Animated.Value(20)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
@@ -213,22 +224,52 @@ const EmployeeRow = memo(function EmployeeRow({
       <View style={rowStyles.info}>
         <Text style={rowStyles.name} numberOfLines={1}>{employee.name}</Text>
         <Text style={rowStyles.email} numberOfLines={1}>{employee.email}</Text>
+        {!employee.is_active && <Text style={rowStyles.inactiveText}>Inactive</Text>}
       </View>
 
-      <View style={[rowStyles.badge, { backgroundColor: MC.blueDim, borderColor: `${MC.blue}44` }]}>
-        <Text style={[rowStyles.badgeText, { color: MC.blue }]}>EMPLOYEE</Text>
+      <View style={[
+        rowStyles.badge,
+        {
+          backgroundColor: employee.role === 'admin' ? MC.goldDim : MC.blueDim,
+          borderColor: employee.role === 'admin' ? `${MC.gold}44` : `${MC.blue}44`,
+        },
+      ]}>
+        <Text style={[
+          rowStyles.badgeText,
+          { color: employee.role === 'admin' ? MC.gold : MC.blue },
+        ]}>
+          {employee.role.toUpperCase()}
+        </Text>
       </View>
 
-      <TouchableOpacity
-        style={[rowStyles.callBtn, canCall ? rowStyles.callBtnActive : rowStyles.callBtnDisabled]}
-        onPress={() => onCall(employee)}
-        disabled={!canCall}
-        activeOpacity={0.75}
-        hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-      >
-        <Phone size={13} color={canCall ? MC.bg : MC.textFaint} strokeWidth={2.5} />
-        {canCall && <Text style={rowStyles.callLabel}>Call</Text>}
-      </TouchableOpacity>
+      <View style={rowStyles.actionsCol}>
+        <TouchableOpacity
+          style={[rowStyles.iconBtn, rowStyles.editBtn]}
+          onPress={() => onEdit(employee)}
+          activeOpacity={0.75}
+        >
+          <Pencil size={13} color={MC.blue} strokeWidth={2.4} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[rowStyles.iconBtn, rowStyles.deleteBtn]}
+          onPress={() => onDelete(employee)}
+          activeOpacity={0.75}
+        >
+          <Trash2 size={13} color={MC.rose} strokeWidth={2.4} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[rowStyles.callBtn, canCall ? rowStyles.callBtnActive : rowStyles.callBtnDisabled]}
+          onPress={() => onCall(employee)}
+          disabled={!canCall}
+          activeOpacity={0.75}
+          hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+        >
+          <Phone size={13} color={canCall ? MC.bg : MC.textFaint} strokeWidth={2.5} />
+          {canCall && <Text style={rowStyles.callLabel}>Call</Text>}
+        </TouchableOpacity>
+      </View>
     </Animated.View>
   );
 });
@@ -291,6 +332,12 @@ const rowStyles = StyleSheet.create({
     fontFamily: MF.mono,
     marginTop: 2,
   },
+  inactiveText: {
+    fontSize: 10,
+    color: MC.rose,
+    fontFamily: MF.mono,
+    marginTop: 4,
+  },
   badge: {
     borderWidth: 1,
     borderRadius: 999,
@@ -302,6 +349,26 @@ const rowStyles = StyleSheet.create({
     fontWeight: '800',
     fontFamily: MF.mono,
     letterSpacing: 1,
+  },
+  actionsCol: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  iconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  editBtn: {
+    backgroundColor: MC.blueDim,
+    borderColor: `${MC.blue}44`,
+  },
+  deleteBtn: {
+    backgroundColor: MC.roseDim,
+    borderColor: `${MC.rose}44`,
   },
   callBtn: {
     flexDirection: 'row',
@@ -618,6 +685,263 @@ function CreateModal({
   );
 }
 
+// ─────────────────────────────────────────────────────────────────
+// EditModal
+// ─────────────────────────────────────────────────────────────────
+function EditModal({
+  visible,
+  employee,
+  onClose,
+  onSaved,
+  disabled,
+}: {
+  visible: boolean;
+  employee: Employee | null;
+  onClose: () => void;
+  onSaved: () => void;
+  disabled: boolean;
+}) {
+  const [form, setForm] = useState<EditForm>({
+    name: '',
+    role: 'employee',
+    is_active: true,
+  });
+  const [errors, setErrors] = useState<EditErrors>({});
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (employee) {
+      setForm({
+        name: employee.name,
+        role: employee.role,
+        is_active: employee.is_active,
+      });
+      setErrors({});
+    }
+  }, [employee]);
+
+  const validate = () => {
+    const e: EditErrors = {};
+    if (!form.name.trim()) e.name = 'Name is required';
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  };
+
+  const handleSave = async () => {
+    if (!employee) return;
+
+    if (disabled) {
+      Alert.alert('Offline', 'Connect to the internet to update this employee.');
+      return;
+    }
+
+    if (!validate()) return;
+
+    setLoading(true);
+    try {
+      await apiPatch(`/admin/employees/${employee.id}`, {
+        name: form.name.trim(),
+        role: form.role,
+        is_active: form.is_active,
+      });
+      onSaved();
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'Failed to update employee');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={onClose}
+    >
+      <KeyboardAvoidingView
+        style={{ flex: 1, backgroundColor: MC.bg }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <ScrollView
+          style={modalStyles.sheet}
+          contentContainerStyle={modalStyles.content}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={modalStyles.handle} />
+
+          <View style={modalStyles.header}>
+            <View>
+              <Text style={modalStyles.title}>Edit Employee</Text>
+              <Text style={modalStyles.titleSub}>
+                Update role, name, or active status.
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              onPress={onClose}
+              style={modalStyles.closeBtn}
+              hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
+            >
+              <X size={14} color={MC.textSub} strokeWidth={2.5} />
+            </TouchableOpacity>
+          </View>
+
+          <Field label="Full Name" error={errors.name}>
+            <TextInput
+              style={[modalStyles.input, errors.name ? modalStyles.inputError : null]}
+              placeholder="Jane Doe"
+              placeholderTextColor={MC.textFaint}
+              value={form.name}
+              onChangeText={v => {
+                setForm(f => ({ ...f, name: v }));
+                setErrors(e => ({ ...e, name: undefined }));
+              }}
+              editable={!loading && !disabled}
+            />
+          </Field>
+
+          <Field label="Role">
+            <View style={editStyles.roleRow}>
+              <TouchableOpacity
+                style={[
+                  editStyles.roleBtn,
+                  form.role === 'employee' && editStyles.roleBtnActive,
+                ]}
+                onPress={() => setForm(f => ({ ...f, role: 'employee' }))}
+                disabled={loading || disabled}
+              >
+                <Text style={[
+                  editStyles.roleBtnText,
+                  form.role === 'employee' && editStyles.roleBtnTextActive,
+                ]}>
+                  Employee
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  editStyles.roleBtn,
+                  form.role === 'admin' && editStyles.roleBtnActiveGold,
+                ]}
+                onPress={() => setForm(f => ({ ...f, role: 'admin' }))}
+                disabled={loading || disabled}
+              >
+                <Text style={[
+                  editStyles.roleBtnText,
+                  form.role === 'admin' && editStyles.roleBtnTextActiveGold,
+                ]}>
+                  Admin
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </Field>
+
+          <Field label="Active Status">
+            <View style={editStyles.switchRow}>
+              <View>
+                <Text style={editStyles.switchTitle}>
+                  {form.is_active ? 'Active' : 'Inactive'}
+                </Text>
+                <Text style={editStyles.switchSub}>
+                  Inactive users cannot use the app until re-enabled.
+                </Text>
+              </View>
+
+              <Switch
+                value={form.is_active}
+                onValueChange={v => setForm(f => ({ ...f, is_active: v }))}
+                disabled={loading || disabled}
+                trackColor={{ false: MC.surfaceLift, true: `${MC.green}66` }}
+                thumbColor={form.is_active ? MC.green : MC.textSub}
+              />
+            </View>
+          </Field>
+
+          <View style={modalStyles.divider} />
+
+          <TouchableOpacity
+            style={[modalStyles.createBtn, (loading || disabled) && { opacity: 0.6 }]}
+            onPress={handleSave}
+            activeOpacity={0.82}
+            disabled={loading || disabled}
+          >
+            {loading ? (
+              <ActivityIndicator color={MC.bg} />
+            ) : (
+              <Text style={modalStyles.createBtnText}>
+                {disabled ? 'Offline' : 'Save Changes'}
+              </Text>
+            )}
+          </TouchableOpacity>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+const editStyles = StyleSheet.create({
+  roleRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  roleBtn: {
+    flex: 1,
+    backgroundColor: MC.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: MC.border,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  roleBtnActive: {
+    backgroundColor: MC.blueDim,
+    borderColor: `${MC.blue}44`,
+  },
+  roleBtnActiveGold: {
+    backgroundColor: MC.goldDim,
+    borderColor: `${MC.gold}44`,
+  },
+  roleBtnText: {
+    color: MC.textSub,
+    fontFamily: MF.mono,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  roleBtnTextActive: {
+    color: MC.blue,
+  },
+  roleBtnTextActiveGold: {
+    color: MC.gold,
+  },
+  switchRow: {
+    backgroundColor: MC.surface,
+    borderWidth: 1,
+    borderColor: MC.border,
+    borderTopColor: MC.borderBright,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+  },
+  switchTitle: {
+    color: MC.textPrimary,
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: MF.display,
+  },
+  switchSub: {
+    color: MC.textFaint,
+    fontSize: 11,
+    fontFamily: MF.mono,
+    marginTop: 4,
+    maxWidth: 220,
+  },
+});
+
 const modalStyles = StyleSheet.create({
   sheet: { flex: 1, backgroundColor: MC.bg },
   content: { padding: 24, paddingBottom: 52 },
@@ -814,7 +1138,9 @@ export default function EmployeesScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [search, setSearch] = useState('');
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
   const fetchEmployees = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -822,7 +1148,7 @@ export default function EmployeesScreen() {
 
     try {
       const data = await apiGet<Employee[]>('/admin/employees');
-      setEmployees(Array.isArray(data) ? data.filter(e => e.role === 'employee') : []);
+      setEmployees(Array.isArray(data) ? data : []);
     } catch (e: any) {
       console.log('[EmployeesScreen] fetchEmployees error:', e);
       Alert.alert('Error', e?.message ?? 'Failed to load employees');
@@ -848,6 +1174,42 @@ export default function EmployeesScreen() {
     });
   }, [navigation]);
 
+  const handleEdit = useCallback((employee: Employee) => {
+    setEditingEmployee(employee);
+  }, []);
+
+  const handleDelete = useCallback((employee: Employee) => {
+    if (!isOnline) {
+      Alert.alert('Offline', 'Connect to the internet to delete this employee.');
+      return;
+    }
+
+    Alert.alert(
+      'Delete Employee',
+      `Are you sure you want to delete ${employee.name}? This action cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setActionLoadingId(employee.id);
+              await apiDelete(`/admin/employees/${employee.id}`);
+              setEmployees(prev => prev.filter(e => e.id !== employee.id));
+              Alert.alert('Deleted', `${employee.name} has been deleted.`);
+            } catch (e: any) {
+              Alert.alert('Error', e?.message ?? 'Failed to delete employee');
+            } finally {
+              setActionLoadingId(null);
+            }
+          },
+        },
+      ],
+      { cancelable: true },
+    );
+  }, [isOnline]);
+
   const query = search.trim().toLowerCase();
   const filtered = employees.filter(e =>
     e.name.toLowerCase().includes(query) ||
@@ -860,7 +1222,7 @@ export default function EmployeesScreen() {
         <View style={s.offlineBanner}>
           <CloudOff size={12} color={MC.rose} />
           <Text style={s.offlineText}>
-            You are offline. Employee list may be stale; creating new employees is disabled.
+            You are offline. Employee list may be stale; changes are disabled.
           </Text>
         </View>
       )}
@@ -914,6 +1276,13 @@ export default function EmployeesScreen() {
           </Text>
         )}
 
+        {actionLoadingId && (
+          <View style={s.actionOverlay}>
+            <ActivityIndicator color={MC.green} />
+            <Text style={s.actionOverlayText}>Updating employee…</Text>
+          </View>
+        )}
+
         {loading ? (
           <View style={s.list}>
             {[...Array(7)].map((_, i) => <SkeletonCard key={i} />)}
@@ -925,7 +1294,13 @@ export default function EmployeesScreen() {
             contentContainerStyle={filtered.length === 0 ? s.emptyList : s.list}
             ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
             renderItem={({ item, index }) => (
-              <EmployeeRow employee={item} index={index} onCall={handleCall} />
+              <EmployeeRow
+                employee={item}
+                index={index}
+                onCall={handleCall}
+                onEdit={handleEdit}
+                onDelete={handleDelete}
+              />
             )}
             ListEmptyComponent={<EmptyState hasSearch={search.length > 0} />}
             refreshControl={
@@ -948,6 +1323,18 @@ export default function EmployeesScreen() {
             setShowCreate(false);
             fetchEmployees();
             Alert.alert('Employee Created', 'They can now log in with their credentials.');
+          }}
+          disabled={!isOnline}
+        />
+
+        <EditModal
+          visible={!!editingEmployee}
+          employee={editingEmployee}
+          onClose={() => setEditingEmployee(null)}
+          onSaved={() => {
+            setEditingEmployee(null);
+            fetchEmployees();
+            Alert.alert('Updated', 'Employee details were updated successfully.');
           }}
           disabled={!isOnline}
         />
@@ -1034,4 +1421,16 @@ const s = StyleSheet.create({
   },
   list: { padding: 16, paddingBottom: 40 },
   emptyList: { flexGrow: 1, padding: 16 },
+  actionOverlay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+  },
+  actionOverlayText: {
+    color: MC.textSub,
+    fontFamily: MF.mono,
+    fontSize: 11,
+  },
 });
