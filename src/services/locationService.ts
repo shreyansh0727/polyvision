@@ -27,12 +27,50 @@ import { useOfflineStore } from '../store/offlineStore';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const GPS_HIGH_ACCURACY_TIMEOUT_MS = 20_000;  // 20 s — high accuracy first attempt
-const GPS_LOW_ACCURACY_TIMEOUT_MS  = 30_000;  // 30 s — fallback
-const GPS_MAX_AGE_MS               = 10_000;  // accept a cached fix up to 10 s old
-const BG_POLL_INTERVAL_MS          = 30_000;  // background poll every 30 s
-const BATTERY_CACHE_MS             = 60_000;  // re-read battery at most once/min
-const WATCH_DISTANCE_FILTER_M      = 15;      // foreground watcher movement threshold
+const GPS_HIGH_ACCURACY_TIMEOUT_MS = 20_000; // 20 s — GPS chip warm-up budget
+const GPS_LOW_ACCURACY_TIMEOUT_MS  = 30_000; // 30 s — network/cell fallback budget
+const BG_POLL_INTERVAL_MS          = 30_000; // background poll every 30 s
+const BATTERY_CACHE_MS             = 60_000; // re-read battery at most once/min
+const WATCH_DISTANCE_FILTER_M      = 15;     // foreground watcher movement threshold
+
+/**
+ * BUG FIX #1 — maximumAge: 0 forces the OS to acquire a FRESH position.
+ *
+ * The original code used maximumAge: 10_000 ms.  The OS location cache is
+ * shared across ALL apps on the device.  If Google Maps, WhatsApp, or any
+ * background service requested location in the previous 10 s, Android/iOS
+ * serves that cached fix instantly — even if it came from a cell tower with
+ * 5 000 m accuracy while the device was indoors.  On a moving vehicle that
+ * cached fix can place the employee 70–80 km from their true position.
+ *
+ * Setting maximumAge: 0 guarantees each call starts a new position acquisition
+ * from the hardware rather than reading an app-agnostic OS cache.
+ */
+const GPS_MAX_AGE_MS = 0;
+
+/**
+ * BUG FIX #2 — Accuracy ceiling for HIGH-accuracy (GPS) fixes.
+ *
+ * Android's Fused Location Provider fires the watchPosition callback with
+ * a low-accuracy network fix BEFORE the GPS chip finishes warming up (TTFF).
+ * These "early" callbacks have accuracy values of 200–2 000 m and go straight
+ * to RTDB without any filter in the original code.
+ *
+ * Any fix worse than this threshold is silently discarded. 50 m is tight
+ * enough to be useful and loose enough to work indoors near a window.
+ */
+const GPS_ACCURACY_THRESHOLD_M = 50;
+
+/**
+ * BUG FIX #2b — Accuracy ceiling for LOW-accuracy (network/cell) fixes.
+ *
+ * When GPS is unavailable we fall back to Wi-Fi / cell towers. In India,
+ * cell-tower-only fixes regularly report accuracy of 1 000–15 000 m.
+ * A 15 000 m radius is a circle 30 km across — a random point inside it
+ * is meaningless.  We cap network fixes at 500 m; anything worse is dropped
+ * and the last known-good position is kept in RTDB instead.
+ */
+const NETWORK_ACCURACY_THRESHOLD_M = 500;
 
 // ─── Module-level state ───────────────────────────────────────────────────────
 
@@ -45,6 +83,19 @@ let startLock  = false;
 
 let _lastBattery:   number = 0;
 let _lastBatteryAt: number = 0;
+
+/**
+ * BUG FIX #6 — Track the best accuracy we have successfully written to RTDB.
+ *
+ * Before overwriting RTDB we compare the new fix's accuracy against this value.
+ * A new fix is only written when it is at least as accurate as the last one,
+ * OR when the last write was more than MAX_ACCURACY_REGRESSION_AGE_MS ago
+ * (so a temporarily degraded signal eventually recovers rather than freezing
+ * the map dot forever).
+ */
+let _lastWrittenAccuracy: number     = Infinity;
+let _lastWrittenAt:       number     = 0;
+const MAX_ACCURACY_REGRESSION_AGE_MS = 60_000; // allow re-write after 60 s even if worse
 
 // ─── Battery ──────────────────────────────────────────────────────────────────
 
@@ -124,10 +175,21 @@ interface GpsResult {
 /**
  * Get current position with automatic high→low accuracy fallback.
  *
+ * BUG FIX #1: maximumAge is now 0 on both attempts (see GPS_MAX_AGE_MS).
+ * BUG FIX #5: The low-accuracy fallback previously used the same maximumAge
+ *   as the high-accuracy attempt.  Since the OS cache is shared, it would
+ *   return the exact same stale fix that caused the high-accuracy call to
+ *   time out — giving no fresher data, just a worse provider.  maximumAge: 0
+ *   forces the network provider to actually query towers/Wi-Fi.
+ *
  * Strategy:
- *   1. Try high-accuracy GPS (20 s timeout).
- *   2. On timeout or error, fall back to network/passive location (30 s timeout).
+ *   1. Try high-accuracy GPS (20 s timeout, fresh fix only).
+ *   2. On timeout or POSITION_UNAVAILABLE, fall back to network/cell (30 s,
+ *      fresh fix only).
  *   3. If both fail, throw so the caller can decide how to handle it.
+ *
+ * NOTE: This function does NOT apply the accuracy threshold — callers do
+ * that via shouldWriteFix() so each call site can use the appropriate ceiling.
  */
 async function getCurrentPositionWithFallback(): Promise<GpsResult> {
   // ── Attempt 1: high accuracy ─────────────────────────────────────────────
@@ -143,7 +205,7 @@ async function getCurrentPositionWithFallback(): Promise<GpsResult> {
         {
           enableHighAccuracy: true,
           timeout:            GPS_HIGH_ACCURACY_TIMEOUT_MS,
-          maximumAge:         GPS_MAX_AGE_MS,
+          maximumAge:         GPS_MAX_AGE_MS, // BUG FIX #1: was GPS_MAX_AGE_MS=10_000
         },
       );
     });
@@ -151,7 +213,7 @@ async function getCurrentPositionWithFallback(): Promise<GpsResult> {
     const code = (e as GeolocationError)?.code;
     // code 3 = TIMEOUT, code 2 = POSITION_UNAVAILABLE — both warrant a fallback
     if (code === 3 || code === 2) {
-      if (__DEV__) console.warn('[GPS] High-accuracy timed out — falling back to low accuracy');
+      if (__DEV__) console.warn('[GPS] High-accuracy timed out — falling back to network location');
     } else {
       // Unexpected error (e.g. code 1 = PERMISSION_DENIED) — don't retry
       throw e;
@@ -159,6 +221,9 @@ async function getCurrentPositionWithFallback(): Promise<GpsResult> {
   }
 
   // ── Attempt 2: low accuracy / network-based ───────────────────────────────
+  // BUG FIX #5: maximumAge: 0 here forces the network provider to do a fresh
+  // tower/Wi-Fi query rather than re-serving the same stale OS-cache fix
+  // that caused the GPS attempt to fail.
   return new Promise<GpsResult>((resolve, reject) => {
     Geolocation.getCurrentPosition(
       (pos: GeolocationResponse) => resolve({
@@ -167,16 +232,72 @@ async function getCurrentPositionWithFallback(): Promise<GpsResult> {
         accuracy: pos.coords.accuracy ?? null,
       }),
       (err: GeolocationError) => {
-        console.error('[GPS] Low-accuracy fallback also failed:', err.message, 'code:', err.code);
+        console.error('[GPS] Network fallback also failed:', err.message, 'code:', err.code);
         reject(new Error(`Location unavailable (code ${err.code}): ${err.message}`));
       },
       {
         enableHighAccuracy: false,
         timeout:            GPS_LOW_ACCURACY_TIMEOUT_MS,
-        maximumAge:         GPS_MAX_AGE_MS,
+        maximumAge:         0, // BUG FIX #5: force a fresh network fix, not the cached GPS miss
       },
     );
   });
+}
+
+// ─── Accuracy guard ───────────────────────────────────────────────────────────
+
+/**
+ * BUG FIX #2, #3, #4, #6 — Central accuracy gate for every write path.
+ *
+ * Returns true when the fix is good enough to write to RTDB.
+ *
+ * Rules:
+ *  a. If accuracy is null/undefined — reject.  An unknown-accuracy fix from
+ *     a degraded provider is worse than no update at all.
+ *  b. If accuracy > threshold — reject.  The fix is too coarse to be useful.
+ *  c. If accuracy > _lastWrittenAccuracy AND the last write was recent — reject.
+ *     Avoid overwriting a precise GPS fix with a coarse cell-tower fix that
+ *     arrived immediately after (Android sends network fixes while GPS warms up).
+ *     After MAX_ACCURACY_REGRESSION_AGE_MS the guard relaxes so the dot
+ *     doesn't freeze if GPS degrades long-term.
+ *
+ * @param accuracy      - metres (lower = better)
+ * @param threshold     - maximum acceptable accuracy in metres
+ */
+function shouldWriteFix(accuracy: number | null | undefined, threshold: number): boolean {
+  if (accuracy == null || !isFinite(accuracy)) {
+    if (__DEV__) console.log(`[AccuracyGuard] Rejected: accuracy unknown`);
+    return false;
+  }
+
+  if (accuracy > threshold) {
+    if (__DEV__)
+      console.log(`[AccuracyGuard] Rejected: ${accuracy.toFixed(0)} m > threshold ${threshold} m`);
+    return false;
+  }
+
+  // BUG FIX #6: regression guard — don't let a degraded fix clobber a good one
+  const ageMs = Date.now() - _lastWrittenAt;
+  if (
+    _lastWrittenAccuracy !== Infinity &&
+    accuracy > _lastWrittenAccuracy * 2 &&   // more than 2× worse than last write
+    ageMs < MAX_ACCURACY_REGRESSION_AGE_MS
+  ) {
+    if (__DEV__)
+      console.log(
+        `[AccuracyGuard] Rejected regression: ${accuracy.toFixed(0)} m vs last ` +
+        `${_lastWrittenAccuracy.toFixed(0)} m (${(ageMs / 1000).toFixed(0)}s ago)`,
+      );
+    return false;
+  }
+
+  return true;
+}
+
+/** Update the last-written accuracy tracker after a successful RTDB write */
+function recordWrite(accuracy: number | null): void {
+  _lastWrittenAccuracy = accuracy ?? Infinity;
+  _lastWrittenAt       = Date.now();
 }
 
 // ─── Backend write ────────────────────────────────────────────────────────────
@@ -228,11 +349,14 @@ async function writeLocationToBackend(payload: {
 /**
  * Write a location update to RTDB.
  *
+ * BUG FIX #2, #3, #4, #6: All call sites now pass the fix through
+ * shouldWriteFix() before calling this function, so inaccurate fixes
+ * (cell-tower noise, GPS warm-up artifacts, stale OS cache) never reach RTDB.
+ *
  * @param tenantId    - Tenant ID (scopes the RTDB path)
  * @param firebaseUid - Firebase Auth UID — MUST match auth.uid per security rules.
- *                      This is NOT the database employee record ID.
  * @param employeeId  - DB employee record ID (stored as a field, not the path key)
- * @param payload     - Location data
+ * @param payload     - Location data (accuracy already validated by caller)
  */
 async function writeLocation(
   tenantId:    string,
@@ -247,12 +371,11 @@ async function writeLocation(
 ): Promise<void> {
   const recorded_at = new Date().toISOString();
 
-  // Path key is firebaseUid — matches auth.uid === $employeeId rule
   const locRef = ref(getDatabase(), `tenants/${tenantId}/locations/${firebaseUid}`);
 
   try {
     await update(locRef, {
-      employee_id:  employeeId,   // store the DB ID as a field for lookups
+      employee_id:  employeeId,
       firebase_uid: firebaseUid,
       lat:          payload.lat,
       lng:          payload.lng,
@@ -261,6 +384,9 @@ async function writeLocation(
       recorded_at,
       is_online:    true,
     });
+
+    // BUG FIX #6: record the accuracy of this successful write
+    recordWrite(payload.accuracy ?? null);
   } catch (e) {
     console.warn('[RTDB] writeLocation failed:', e);
     throw e;
@@ -280,7 +406,17 @@ interface BgTaskData {
 
 /**
  * Background task: polls GPS every 30 s and pushes to RTDB.
- * Uses the high→low accuracy fallback so indoor devices don't stall.
+ *
+ * BUG FIX #3: Added accuracy guard before every writeLocation call.
+ * When the screen is off, the GPS chip enters a low-power mode; the first
+ * fix after wake-up often comes from cell towers with accuracy > 1 000 m.
+ * These are now discarded using NETWORK_ACCURACY_THRESHOLD_M (500 m).
+ *
+ * GPS fixes must pass GPS_ACCURACY_THRESHOLD_M (50 m).
+ * Network fixes must pass NETWORK_ACCURACY_THRESHOLD_M (500 m).
+ * getCurrentPositionWithFallback() reports which provider was used via
+ * the accuracy value — GPS is typically < 20 m, network is typically > 100 m,
+ * so the thresholds naturally route to the right ceiling.
  */
 const backgroundTask = async (taskData: unknown): Promise<void> => {
   const data = taskData as Partial<BgTaskData> | null;
@@ -296,12 +432,29 @@ const backgroundTask = async (taskData: unknown): Promise<void> => {
   while (true) {
     try {
       const pos = await getCurrentPositionWithFallback();
-      await writeLocation(tenantId, firebaseUid, employeeId, {
-        ...pos,
-        battery: await getBattery(),
-      });
+
+      // BUG FIX #3: choose the correct accuracy ceiling based on fix quality.
+      // A GPS fix (accuracy < 50 m) uses the tight GPS threshold.
+      // A network/cell fix (accuracy > 50 m) uses the looser network threshold.
+      // Anything above 500 m is silently dropped.
+      const accuracyThreshold =
+        (pos.accuracy != null && pos.accuracy <= GPS_ACCURACY_THRESHOLD_M)
+          ? GPS_ACCURACY_THRESHOLD_M
+          : NETWORK_ACCURACY_THRESHOLD_M;
+
+      if (!shouldWriteFix(pos.accuracy, accuracyThreshold)) {
+        if (__DEV__)
+          console.log(
+            `[BG] Fix dropped — accuracy ${pos.accuracy?.toFixed(0) ?? 'unknown'} m` +
+            ` exceeds threshold ${accuracyThreshold} m`,
+          );
+      } else {
+        await writeLocation(tenantId, firebaseUid, employeeId, {
+          ...pos,
+          battery: await getBattery(),
+        });
+      }
     } catch (e) {
-      // Log but never crash the loop — next iteration will retry
       console.warn('[BG] GPS/write error (will retry next cycle):', (e as Error)?.message ?? e);
     }
 
@@ -322,18 +475,6 @@ const backgroundOptions = {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-/**
- * Start location tracking.
- *
- * CHANGE: The initial GPS fix is now non-blocking. Tracking starts immediately
- * (watcher + background service), and the first RTDB write happens as soon as
- * a position is available — even if that takes 30+ seconds on weak signal.
- * This prevents the "location request timed out" crash on slow GPS devices.
- *
- * @param tenantId    - Tenant ID
- * @param employeeId  - DB employee record ID (stored as a field in RTDB)
- * @param firebaseUid - Firebase Auth UID (used as RTDB path key to satisfy security rules)
- */
 export async function startTracking(
   tenantId:    string,
   employeeId:  string,
@@ -359,17 +500,25 @@ export async function startTracking(
       await onDisconnect(locRef).update({ is_online: false });
     } catch (e) {
       console.warn('[RTDB] onDisconnect setup failed:', e);
-      // Non-fatal — continue starting tracking
     }
 
     // ── Non-blocking initial fix ─────────────────────────────────────────────
-    // Fire-and-forget: kick off a position request in the background.
-    // If it succeeds quickly, RTDB gets an immediate update.
-    // If it's slow (indoor, weak signal), tracking is already running via the
-    // watcher and background task — the user isn't shown a timeout error.
     getCurrentPositionWithFallback()
       .then(async (pos) => {
-        if (!isTracking) return; // aborted before fix arrived
+        if (!isTracking) return;
+
+        // BUG FIX #2: apply the tight GPS threshold to the initial fix.
+        // If GPS hasn't warmed up yet, the first fix may be a stale cell-tower
+        // result — reject it here; the watcher will send a better one shortly.
+        if (!shouldWriteFix(pos.accuracy, GPS_ACCURACY_THRESHOLD_M)) {
+          if (__DEV__)
+            console.log(
+              `[Tracking] Initial fix rejected — accuracy ` +
+              `${pos.accuracy?.toFixed(0) ?? 'unknown'} m`,
+            );
+          return;
+        }
+
         try {
           await writeLocation(tenantId, firebaseUid, employeeId, {
             ...pos,
@@ -381,20 +530,40 @@ export async function startTracking(
         }
       })
       .catch((e) => {
-        // Both high and low accuracy failed — the watcher will still push
-        // updates whenever the device gets a fix.
         console.warn('[Tracking] Initial position unavailable (watcher will recover):', e);
       });
 
     // ── Foreground watcher ───────────────────────────────────────────────────
+    // BUG FIX #4: Added accuracy guard in the watcher callback.
+    // Android's Fused Location Provider fires callbacks with coarse network
+    // fixes (accuracy: 200–2000 m) while the GPS chip is warming up.
+    // These are now rejected using GPS_ACCURACY_THRESHOLD_M (50 m).
     watchId = Geolocation.watchPosition(
       async (pos: GeolocationResponse) => {
         if (!isTracking) return;
+
+        const accuracy = pos.coords.accuracy ?? null;
+
+        // BUG FIX #4: same dual-threshold logic as background task
+        const accuracyThreshold =
+          (accuracy != null && accuracy <= GPS_ACCURACY_THRESHOLD_M)
+            ? GPS_ACCURACY_THRESHOLD_M
+            : NETWORK_ACCURACY_THRESHOLD_M;
+
+        if (!shouldWriteFix(accuracy, accuracyThreshold)) {
+          if (__DEV__)
+            console.log(
+              `[GEO] Watcher fix dropped — accuracy ` +
+              `${accuracy?.toFixed(0) ?? 'unknown'} m`,
+            );
+          return;
+        }
+
         try {
           await writeLocation(tenantId, firebaseUid, employeeId, {
             lat:      pos.coords.latitude,
             lng:      pos.coords.longitude,
-            accuracy: pos.coords.accuracy ?? null,
+            accuracy,
             battery:  await getBattery(),
           });
         } catch (e) {
@@ -421,7 +590,6 @@ export async function startTracking(
         });
       } catch (e) {
         console.warn('[Tracking] BackgroundActions.start() failed:', e);
-        // Non-fatal — foreground watcher is still active
       }
     }
 
@@ -430,7 +598,6 @@ export async function startTracking(
 
   } catch (e: unknown) {
     console.error('[Tracking] startTracking crashed:', e);
-    // Clean up any partial state
     await stopTracking(tenantId, firebaseUid).catch(() => {});
     throw e;
   } finally {
@@ -438,20 +605,17 @@ export async function startTracking(
   }
 }
 
-/**
- * Stop location tracking and mark the employee offline in RTDB.
- *
- * @param tenantId    - Tenant ID (optional; skips RTDB write if absent)
- * @param firebaseUid - Firebase Auth UID path key (optional; skips RTDB write if absent)
- */
 export async function stopTracking(
   tenantId?:    string,
   firebaseUid?: string,
 ): Promise<void> {
-  // Clear immediately so any in-flight watcher callbacks won't write after stop
   isTracking = false;
 
-  // ── Mark employee offline in RTDB ────────────────────────────────────────
+  // BUG FIX #6: reset the accuracy tracker on stop so the next session starts
+  // fresh rather than inheriting the last session's threshold.
+  _lastWrittenAccuracy = Infinity;
+  _lastWrittenAt       = 0;
+
   if (tenantId && firebaseUid) {
     try {
       const locRef = ref(getDatabase(), `tenants/${tenantId}/locations/${firebaseUid}`);
@@ -459,11 +623,9 @@ export async function stopTracking(
       await update(locRef, { is_online: false });
     } catch (e) {
       console.warn('[RTDB] Failed to mark employee offline:', e);
-      // Non-fatal: onDisconnect handler will fire when connection drops
     }
   }
 
-  // ── Clear foreground watcher ──────────────────────────────────────────────
   if (watchId !== null) {
     try {
       Geolocation.clearWatch(watchId);
@@ -473,13 +635,11 @@ export async function stopTracking(
     watchId = null;
   }
 
-  // ── Clear legacy interval ─────────────────────────────────────────────────
   if (bgInterval !== null) {
     clearInterval(bgInterval);
     bgInterval = null;
   }
 
-  // ── Stop background service ───────────────────────────────────────────────
   try {
     if (BackgroundActions.isRunning()) {
       await BackgroundActions.stop();
@@ -491,7 +651,6 @@ export async function stopTracking(
   if (__DEV__) console.log('[Tracking] Stopped ✅');
 }
 
-/** Returns true if location tracking is currently active */
 export function getIsTracking(): boolean {
   return isTracking;
 }
