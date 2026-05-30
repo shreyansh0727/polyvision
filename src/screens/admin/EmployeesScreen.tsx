@@ -6,11 +6,13 @@ import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   TextInput, Modal, ScrollView, Alert, ActivityIndicator,
   KeyboardAvoidingView, Platform, Animated, RefreshControl, Switch,
+  Pressable, Dimensions,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   Phone, Search, Users, X, CloudOff, UserPlus, User, Pencil, Trash2,
+  ChevronRight, Shield,
   type LucideIcon,
 } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -21,6 +23,7 @@ import { apiGet, apiPost, apiDelete, apiPatch } from '../../services/api';
 import { useOfflineStore } from '../../store/offlineStore';
 
 type AdminNav = NativeStackNavigationProp<AdminStackParamList>;
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 interface Employee {
   id: string;
@@ -58,7 +61,7 @@ const EMPTY_FORM: CreateForm = {
 };
 
 // ─────────────────────────────────────────────────────────────────
-// PulseDot
+// PulseDot — unchanged
 // ─────────────────────────────────────────────────────────────────
 const PulseDot = memo(function PulseDot({
   color = MC.green,
@@ -112,7 +115,7 @@ const PulseDot = memo(function PulseDot({
 });
 
 // ─────────────────────────────────────────────────────────────────
-// SkeletonCard
+// SkeletonCard — unchanged
 // ─────────────────────────────────────────────────────────────────
 function SkeletonCard() {
   const shimmer = useRef(new Animated.Value(0)).current;
@@ -126,10 +129,7 @@ function SkeletonCard() {
     ).start();
   }, [shimmer]);
 
-  const opacity = shimmer.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.4, 0.85],
-  });
+  const opacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [0.4, 0.85] });
 
   return (
     <Animated.View style={[skelStyles.card, { opacity }]}>
@@ -139,7 +139,7 @@ function SkeletonCard() {
         <View style={skelStyles.lineNarrow} />
       </View>
       <View style={skelStyles.badge} />
-      <View style={skelStyles.callBtn} />
+      <View style={skelStyles.chevron} />
     </Animated.View>
   );
 }
@@ -149,127 +149,139 @@ const skelStyles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: MC.surface,
-    borderRadius: 16,
+    borderRadius: 18,
     padding: 14,
     borderWidth: 1,
     borderColor: MC.border,
     gap: 12,
   },
-  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: MC.surfaceLift },
+  avatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: MC.surfaceLift },
   lines: { flex: 1, gap: 8 },
-  lineWide: { height: 12, borderRadius: 6, backgroundColor: MC.surfaceLift, width: '60%' },
-  lineNarrow: { height: 10, borderRadius: 5, backgroundColor: MC.surfaceLift, width: '40%' },
-  badge: { width: 70, height: 22, borderRadius: 999, backgroundColor: MC.surfaceLift },
-  callBtn: { width: 50, height: 36, borderRadius: 18, backgroundColor: MC.surfaceLift },
+  lineWide: { height: 12, borderRadius: 6, backgroundColor: MC.surfaceLift, width: '55%' },
+  lineNarrow: { height: 10, borderRadius: 5, backgroundColor: MC.surfaceLift, width: '38%' },
+  badge: { width: 64, height: 22, borderRadius: 999, backgroundColor: MC.surfaceLift },
+  chevron: { width: 16, height: 16, borderRadius: 8, backgroundColor: MC.surfaceLift },
 });
 
 // ─────────────────────────────────────────────────────────────────
-// EmployeeRow
+// EmployeeRow — CHANGED: fully tappable, no inline action buttons
 // ─────────────────────────────────────────────────────────────────
 const EmployeeRow = memo(function EmployeeRow({
   employee,
   index,
-  onCall,
-  onEdit,
-  onDelete,
+  onPress,
 }: {
   employee: Employee;
   index: number;
-  onCall: (employee: Employee) => void;
-  onEdit: (employee: Employee) => void;
-  onDelete: (employee: Employee) => void;
+  onPress: (employee: Employee) => void;
 }) {
-  const slideAnim = useRef(new Animated.Value(20)).current;
+  const slideAnim = useRef(new Animated.Value(24)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
+  const pressScale = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     Animated.parallel([
       Animated.timing(slideAnim, {
         toValue: 0,
-        duration: 300,
-        delay: Math.min(index * 40, 400),
+        duration: 320,
+        delay: Math.min(index * 45, 420),
         useNativeDriver: true,
       }),
       Animated.timing(opacityAnim, {
         toValue: 1,
-        duration: 260,
-        delay: Math.min(index * 40, 400),
+        duration: 280,
+        delay: Math.min(index * 45, 420),
         useNativeDriver: true,
       }),
     ]).start();
   }, [index, opacityAnim, slideAnim]);
 
+  const handlePressIn = () => {
+    Animated.spring(pressScale, {
+      toValue: 0.972,
+      useNativeDriver: true,
+      friction: 10,
+      tension: 200,
+    }).start();
+  };
+
+  const handlePressOut = () => {
+    Animated.spring(pressScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      friction: 8,
+      tension: 120,
+    }).start();
+  };
+
   const initial = employee.name.charAt(0).toUpperCase();
   const accentColor = avatarColor(employee.name);
-  const canCall = Boolean(employee.fcm_token);
+  const isAdmin = employee.role === 'admin';
 
   return (
     <Animated.View
       style={[
-        rowStyles.card,
-        { transform: [{ translateY: slideAnim }], opacity: opacityAnim },
+        { transform: [{ translateY: slideAnim }, { scale: pressScale }], opacity: opacityAnim },
       ]}
     >
-      <View style={[rowStyles.avatarRing, { borderColor: accentColor }]}>
-        <View style={[rowStyles.avatar, { backgroundColor: `${accentColor}18` }]}>
-          <Text style={[rowStyles.initial, { color: accentColor }]}>{initial}</Text>
-        </View>
-        {employee.is_active && (
-          <View style={rowStyles.activeDot}>
-            <PulseDot color={MC.green} size={7} />
+      <Pressable
+        onPress={() => onPress(employee)}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        style={rowStyles.card}
+      >
+        {/* Avatar */}
+        <View style={rowStyles.avatarWrap}>
+          <View style={[rowStyles.avatarRing, { borderColor: `${accentColor}55` }]}>
+            <View style={[rowStyles.avatar, { backgroundColor: `${accentColor}1A` }]}>
+              <Text style={[rowStyles.initial, { color: accentColor }]}>{initial}</Text>
+            </View>
           </View>
-        )}
-      </View>
+          {/* Online/offline dot */}
+          <View style={[
+            rowStyles.statusDot,
+            { backgroundColor: employee.is_active ? MC.green : MC.rose },
+          ]}>
+            {employee.is_active && (
+              <View style={rowStyles.statusDotInner} />
+            )}
+          </View>
+        </View>
 
-      <View style={rowStyles.info}>
-        <Text style={rowStyles.name} numberOfLines={1}>{employee.name}</Text>
-        <Text style={rowStyles.email} numberOfLines={1}>{employee.email}</Text>
-        {!employee.is_active && <Text style={rowStyles.inactiveText}>Inactive</Text>}
-      </View>
+        {/* Info */}
+        <View style={rowStyles.info}>
+          <View style={rowStyles.nameRow}>
+            <Text style={rowStyles.name} numberOfLines={1}>{employee.name}</Text>
+            {isAdmin && (
+              <Shield size={10} color={MC.gold} strokeWidth={2.5} style={{ marginLeft: 4 }} />
+            )}
+          </View>
+          <Text style={rowStyles.email} numberOfLines={1}>{employee.email}</Text>
+        </View>
 
-      <View style={[
-        rowStyles.badge,
-        {
-          backgroundColor: employee.role === 'admin' ? MC.goldDim : MC.blueDim,
-          borderColor: employee.role === 'admin' ? `${MC.gold}44` : `${MC.blue}44`,
-        },
-      ]}>
-        <Text style={[
-          rowStyles.badgeText,
-          { color: employee.role === 'admin' ? MC.gold : MC.blue },
+        {/* Role badge */}
+        <View style={[
+          rowStyles.badge,
+          isAdmin
+            ? { backgroundColor: MC.goldDim, borderColor: `${MC.gold}33` }
+            : { backgroundColor: MC.blueDim, borderColor: `${MC.blue}33` },
         ]}>
-          {employee.role.toUpperCase()}
-        </Text>
-      </View>
+          <Text style={[
+            rowStyles.badgeText,
+            { color: isAdmin ? MC.gold : MC.blue },
+          ]}>
+            {employee.role.toUpperCase()}
+          </Text>
+        </View>
 
-      <View style={rowStyles.actionsCol}>
-        <TouchableOpacity
-          style={[rowStyles.iconBtn, rowStyles.editBtn]}
-          onPress={() => onEdit(employee)}
-          activeOpacity={0.75}
-        >
-          <Pencil size={13} color={MC.blue} strokeWidth={2.4} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[rowStyles.iconBtn, rowStyles.deleteBtn]}
-          onPress={() => onDelete(employee)}
-          activeOpacity={0.75}
-        >
-          <Trash2 size={13} color={MC.rose} strokeWidth={2.4} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[rowStyles.callBtn, canCall ? rowStyles.callBtnActive : rowStyles.callBtnDisabled]}
-          onPress={() => onCall(employee)}
-          disabled={!canCall}
-          activeOpacity={0.75}
-          hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-        >
-          <Phone size={13} color={canCall ? MC.bg : MC.textFaint} strokeWidth={2.5} />
-          {canCall && <Text style={rowStyles.callLabel}>Call</Text>}
-        </TouchableOpacity>
-      </View>
+        {/* Tap indicator */}
+        <ChevronRight
+          size={15}
+          color={MC.textFaint}
+          strokeWidth={2}
+          style={{ opacity: 0.5 }}
+        />
+      </Pressable>
     </Animated.View>
   );
 });
@@ -279,52 +291,69 @@ const rowStyles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: MC.surface,
-    borderRadius: 16,
-    padding: 14,
+    borderRadius: 18,
+    paddingVertical: 13,
+    paddingHorizontal: 14,
     borderWidth: 1,
     borderColor: MC.border,
     borderTopColor: MC.borderBright,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
-    gap: 12,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.22,
+    shadowRadius: 6,
+    elevation: 4,
+    gap: 11,
   },
+  avatarWrap: { position: 'relative' },
   avatarRing: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 43,
+    height: 43,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
   initial: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800',
     fontFamily: MF.display,
   },
-  activeDot: {
+  statusDot: {
     position: 'absolute',
-    bottom: -1,
-    right: -1,
-    backgroundColor: MC.surface,
+    bottom: 0,
+    right: 0,
+    width: 11,
+    height: 11,
     borderRadius: 6,
-    padding: 1,
+    borderWidth: 2,
+    borderColor: MC.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statusDotInner: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.6)',
   },
   info: { flex: 1 },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   name: {
     fontSize: 14,
     fontWeight: '700',
     color: MC.textPrimary,
     fontFamily: MF.display,
+    flexShrink: 1,
   },
   email: {
     fontSize: 11,
@@ -332,79 +361,353 @@ const rowStyles = StyleSheet.create({
     fontFamily: MF.mono,
     marginTop: 2,
   },
-  inactiveText: {
-    fontSize: 10,
-    color: MC.rose,
-    fontFamily: MF.mono,
-    marginTop: 4,
-  },
   badge: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  badgeText: {
+    fontSize: 8,
+    fontWeight: '800',
+    fontFamily: MF.mono,
+    letterSpacing: 1,
+  },
+});
+
+// ─────────────────────────────────────────────────────────────────
+// ActionSheet — NEW: bottom sheet with Call / Edit / Delete
+// ─────────────────────────────────────────────────────────────────
+function ActionSheet({
+  employee,
+  visible,
+  onClose,
+  onCall,
+  onEdit,
+  onDelete,
+  isOnline,
+}: {
+  employee: Employee | null;
+  visible: boolean;
+  onClose: () => void;
+  onCall: (e: Employee) => void;
+  onEdit: (e: Employee) => void;
+  onDelete: (e: Employee) => void;
+  isOnline: boolean;
+}) {
+  const translateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    if (visible) {
+      setMounted(true);
+      Animated.parallel([
+        Animated.spring(translateY, {
+          toValue: 0,
+          useNativeDriver: true,
+          damping: 22,
+          stiffness: 280,
+          mass: 0.9,
+        }),
+        Animated.timing(backdropOpacity, {
+          toValue: 1,
+          duration: 220,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(translateY, {
+          toValue: SCREEN_HEIGHT,
+          duration: 260,
+          useNativeDriver: true,
+        }),
+        Animated.timing(backdropOpacity, {
+          toValue: 0,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+      ]).start(() => setMounted(false));
+    }
+  }, [visible, translateY, backdropOpacity]);
+
+  if (!mounted || !employee) return null;
+
+  const accentColor = avatarColor(employee.name);
+  const initial = employee.name.charAt(0).toUpperCase();
+  const canCall = Boolean(employee.fcm_token);
+  const isAdmin = employee.role === 'admin';
+
+  return (
+    <View style={sheetStyles.overlay} pointerEvents="box-none">
+      {/* Backdrop */}
+      <Animated.View
+        style={[sheetStyles.backdrop, { opacity: backdropOpacity }]}
+        pointerEvents={visible ? 'auto' : 'none'}
+      >
+        <Pressable style={{ flex: 1 }} onPress={onClose} />
+      </Animated.View>
+
+      {/* Sheet */}
+      <Animated.View
+        style={[sheetStyles.sheet, { transform: [{ translateY }] }]}
+        pointerEvents="box-none"
+      >
+        {/* Pull handle */}
+        <View style={sheetStyles.handle} />
+
+        {/* Employee header */}
+        <View style={sheetStyles.empHeader}>
+          <View style={[sheetStyles.empAvatarRing, { borderColor: `${accentColor}55` }]}>
+            <View style={[sheetStyles.empAvatar, { backgroundColor: `${accentColor}1A` }]}>
+              <Text style={[sheetStyles.empInitial, { color: accentColor }]}>{initial}</Text>
+            </View>
+          </View>
+
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={sheetStyles.empName} numberOfLines={1}>{employee.name}</Text>
+              {isAdmin && <Shield size={11} color={MC.gold} strokeWidth={2.5} />}
+            </View>
+            <Text style={sheetStyles.empEmail} numberOfLines={1}>{employee.email}</Text>
+          </View>
+
+          <View style={[
+            sheetStyles.empBadge,
+            isAdmin
+              ? { backgroundColor: MC.goldDim, borderColor: `${MC.gold}33` }
+              : { backgroundColor: MC.blueDim, borderColor: `${MC.blue}33` },
+          ]}>
+            <Text style={[sheetStyles.empBadgeText, { color: isAdmin ? MC.gold : MC.blue }]}>
+              {employee.role.toUpperCase()}
+            </Text>
+          </View>
+        </View>
+
+        <View style={sheetStyles.divider} />
+
+        {/* Action rows */}
+        <View style={sheetStyles.actions}>
+
+          {/* Call */}
+          <TouchableOpacity
+            style={[sheetStyles.actionRow, !canCall && { opacity: 0.38 }]}
+            onPress={() => { onClose(); setTimeout(() => onCall(employee), 200); }}
+            disabled={!canCall}
+            activeOpacity={0.72}
+          >
+            <View style={[sheetStyles.actionIcon, { backgroundColor: `${MC.green}18`, borderColor: `${MC.green}33` }]}>
+              <Phone size={16} color={MC.green} strokeWidth={2.3} />
+            </View>
+            <View style={sheetStyles.actionText}>
+              <Text style={sheetStyles.actionLabel}>Call Employee</Text>
+              <Text style={sheetStyles.actionSub}>
+                {canCall ? 'Start a voice call via the app' : 'No device registered yet'}
+              </Text>
+            </View>
+            <ChevronRight size={14} color={MC.textFaint} strokeWidth={2} />
+          </TouchableOpacity>
+
+          <View style={sheetStyles.rowDivider} />
+
+          {/* Edit */}
+          <TouchableOpacity
+            style={[sheetStyles.actionRow, !isOnline && { opacity: 0.38 }]}
+            onPress={() => { onClose(); setTimeout(() => onEdit(employee), 200); }}
+            disabled={!isOnline}
+            activeOpacity={0.72}
+          >
+            <View style={[sheetStyles.actionIcon, { backgroundColor: `${MC.blue}18`, borderColor: `${MC.blue}33` }]}>
+              <Pencil size={16} color={MC.blue} strokeWidth={2.3} />
+            </View>
+            <View style={sheetStyles.actionText}>
+              <Text style={sheetStyles.actionLabel}>Edit Employee</Text>
+              <Text style={sheetStyles.actionSub}>
+                {isOnline ? 'Change name, role, or status' : 'Available when online'}
+              </Text>
+            </View>
+            <ChevronRight size={14} color={MC.textFaint} strokeWidth={2} />
+          </TouchableOpacity>
+
+          <View style={sheetStyles.rowDivider} />
+
+          {/* Delete */}
+          <TouchableOpacity
+            style={[sheetStyles.actionRow, !isOnline && { opacity: 0.38 }]}
+            onPress={() => { onClose(); setTimeout(() => onDelete(employee), 200); }}
+            disabled={!isOnline}
+            activeOpacity={0.72}
+          >
+            <View style={[sheetStyles.actionIcon, { backgroundColor: `${MC.rose}18`, borderColor: `${MC.rose}33` }]}>
+              <Trash2 size={16} color={MC.rose} strokeWidth={2.3} />
+            </View>
+            <View style={sheetStyles.actionText}>
+              <Text style={[sheetStyles.actionLabel, { color: MC.rose }]}>Delete Employee</Text>
+              <Text style={sheetStyles.actionSub}>
+                {isOnline ? 'Permanently remove from workspace' : 'Available when online'}
+              </Text>
+            </View>
+            <ChevronRight size={14} color={`${MC.rose}66`} strokeWidth={2} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Cancel */}
+        <TouchableOpacity style={sheetStyles.cancelBtn} onPress={onClose} activeOpacity={0.75}>
+          <Text style={sheetStyles.cancelText}>Cancel</Text>
+        </TouchableOpacity>
+      </Animated.View>
+    </View>
+  );
+}
+
+const sheetStyles = StyleSheet.create({
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-end',
+    zIndex: 100,
+  },
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+  },
+  sheet: {
+    backgroundColor: MC.surface,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    paddingBottom: 36,
+    borderTopWidth: 1,
+    borderColor: MC.borderBright,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.45,
+    shadowRadius: 24,
+    elevation: 20,
+  },
+  handle: {
+    alignSelf: 'center',
+    width: 38,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: MC.borderBright,
+    marginTop: 12,
+    marginBottom: 18,
+  },
+  empHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    gap: 12,
+    marginBottom: 16,
+  },
+  empAvatarRing: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  empAvatar: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  empInitial: {
+    fontSize: 19,
+    fontWeight: '800',
+    fontFamily: MF.display,
+  },
+  empName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: MC.textPrimary,
+    fontFamily: MF.display,
+    flexShrink: 1,
+  },
+  empEmail: {
+    fontSize: 11,
+    color: MC.textSub,
+    fontFamily: MF.mono,
+    marginTop: 2,
+  },
+  empBadge: {
     borderWidth: 1,
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 4,
   },
-  badgeText: {
-    fontSize: 9,
+  empBadgeText: {
+    fontSize: 8,
     fontWeight: '800',
     fontFamily: MF.mono,
     letterSpacing: 1,
   },
-  actionsCol: {
-    alignItems: 'flex-end',
-    gap: 8,
+  divider: {
+    height: 1,
+    backgroundColor: MC.border,
+    marginHorizontal: 20,
+    marginBottom: 4,
   },
-  iconBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
+  actions: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
   },
-  editBtn: {
-    backgroundColor: MC.blueDim,
-    borderColor: `${MC.blue}44`,
-  },
-  deleteBtn: {
-    backgroundColor: MC.roseDim,
-    borderColor: `${MC.rose}44`,
-  },
-  callBtn: {
+  actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 6,
+    gap: 14,
+  },
+  actionIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  callBtnActive: {
-    backgroundColor: MC.green,
-    borderColor: MC.green,
-    shadowColor: MC.green,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.45,
-    shadowRadius: 8,
-    elevation: 5,
+  actionText: { flex: 1 },
+  actionLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: MC.textPrimary,
+    fontFamily: MF.display,
   },
-  callBtnDisabled: {
-    backgroundColor: MC.surfaceAlt,
-    borderColor: MC.border,
-    opacity: 0.4,
-  },
-  callLabel: {
+  actionSub: {
     fontSize: 11,
-    fontWeight: '800',
-    color: MC.bg,
+    color: MC.textFaint,
     fontFamily: MF.mono,
-    letterSpacing: 0.3,
+    marginTop: 2,
+  },
+  rowDivider: {
+    height: 1,
+    backgroundColor: MC.border,
+    marginLeft: 54,
+  },
+  cancelBtn: {
+    marginHorizontal: 16,
+    marginTop: 14,
+    paddingVertical: 15,
+    borderRadius: 14,
+    backgroundColor: MC.surfaceLift,
+    borderWidth: 1,
+    borderColor: MC.border,
+    alignItems: 'center',
+  },
+  cancelText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: MC.textSub,
+    fontFamily: MF.mono,
   },
 });
 
 // ─────────────────────────────────────────────────────────────────
-// EmptyState
+// EmptyState — unchanged
 // ─────────────────────────────────────────────────────────────────
 function EmptyState({ hasSearch }: { hasSearch: boolean }) {
   const scaleAnim = useRef(new Animated.Value(0.85)).current;
@@ -412,17 +715,8 @@ function EmptyState({ hasSearch }: { hasSearch: boolean }) {
 
   useEffect(() => {
     Animated.parallel([
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        friction: 8,
-        tension: 80,
-        useNativeDriver: true,
-      }),
-      Animated.timing(opacityAnim, {
-        toValue: 1,
-        duration: 400,
-        useNativeDriver: true,
-      }),
+      Animated.spring(scaleAnim, { toValue: 1, friction: 8, tension: 80, useNativeDriver: true }),
+      Animated.timing(opacityAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
     ]).start();
   }, [opacityAnim, scaleAnim]);
 
@@ -477,7 +771,7 @@ const emptyStyles = StyleSheet.create({
 });
 
 // ─────────────────────────────────────────────────────────────────
-// Field
+// Field — unchanged
 // ─────────────────────────────────────────────────────────────────
 function Field({
   label,
@@ -498,23 +792,16 @@ function Field({
 }
 
 // ─────────────────────────────────────────────────────────────────
-// CreateModal
+// CreateModal — unchanged
 // ─────────────────────────────────────────────────────────────────
 function CreateModal({
-  visible,
-  onClose,
-  onCreated,
-  disabled,
+  visible, onClose, onCreated, disabled,
 }: {
-  visible: boolean;
-  onClose: () => void;
-  onCreated: () => void;
-  disabled: boolean;
+  visible: boolean; onClose: () => void; onCreated: () => void; disabled: boolean;
 }) {
   const [form, setForm] = useState<CreateForm>(EMPTY_FORM);
   const [errors, setErrors] = useState<FormErrors>({});
   const [loading, setLoading] = useState(false);
-
   const emailRef = useRef<TextInput>(null);
   const passwordRef = useRef<TextInput>(null);
 
@@ -525,27 +812,18 @@ function CreateModal({
 
   const validate = (): boolean => {
     const e: FormErrors = {};
-
     if (!form.name.trim()) e.name = 'Name is required';
-
     if (!form.email.trim()) e.email = 'Email is required';
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) e.email = 'Enter a valid email';
-
     if (!form.password) e.password = 'Password is required';
     else if (form.password.length < 6) e.password = 'Minimum 6 characters';
-
     setErrors(e);
     return Object.keys(e).length === 0;
   };
 
   const handleCreate = async () => {
-    if (disabled) {
-      Alert.alert('Offline', 'You are offline. Connect to the internet to create a new employee.');
-      return;
-    }
-
+    if (disabled) { Alert.alert('Offline', 'Connect to the internet to create a new employee.'); return; }
     if (!validate()) return;
-
     setLoading(true);
     try {
       await apiPost('/admin/employees', {
@@ -554,130 +832,50 @@ function CreateModal({
         password: form.password,
         role: 'employee',
       });
-
       setForm(EMPTY_FORM);
       setErrors({});
       onCreated();
     } catch (e: any) {
       const msg = e?.message ?? 'Failed to create employee';
-      if (String(msg).toLowerCase().includes('already')) {
-        setErrors({ email: 'Email already registered' });
-      } else {
-        Alert.alert('Error', msg);
-      }
+      if (String(msg).toLowerCase().includes('already')) setErrors({ email: 'Email already registered' });
+      else Alert.alert('Error', msg);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleClose = () => {
-    setForm(EMPTY_FORM);
-    setErrors({});
-    onClose();
-  };
+  const handleClose = () => { setForm(EMPTY_FORM); setErrors({}); onClose(); };
 
   return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={handleClose}
-    >
-      <KeyboardAvoidingView
-        style={{ flex: 1, backgroundColor: MC.bg }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <ScrollView
-          style={modalStyles.sheet}
-          contentContainerStyle={modalStyles.content}
-          keyboardShouldPersistTaps="handled"
-        >
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={handleClose}>
+      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: MC.bg }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <ScrollView style={modalStyles.sheet} contentContainerStyle={modalStyles.content} keyboardShouldPersistTaps="handled">
           <View style={modalStyles.handle} />
-
           <View style={modalStyles.header}>
             <View>
               <Text style={modalStyles.title}>New Employee</Text>
-              <Text style={modalStyles.titleSub}>
-                {disabled
-                  ? 'You are offline. Creation will be available when online.'
-                  : 'Add a new team member to your workspace.'}
-              </Text>
+              <Text style={modalStyles.titleSub}>{disabled ? 'You are offline. Creation will be available when online.' : 'Add a new team member to your workspace.'}</Text>
             </View>
-
-            <TouchableOpacity
-              onPress={handleClose}
-              style={modalStyles.closeBtn}
-              hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
-            >
+            <TouchableOpacity onPress={handleClose} style={modalStyles.closeBtn} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
               <X size={14} color={MC.textSub} strokeWidth={2.5} />
             </TouchableOpacity>
           </View>
-
           <Field label="Full Name" error={errors.name}>
-            <TextInput
-              style={[modalStyles.input, errors.name ? modalStyles.inputError : null]}
-              placeholder="Jane Doe"
-              placeholderTextColor={MC.textFaint}
-              value={form.name}
-              onChangeText={v => setField('name', v)}
-              returnKeyType="next"
-              onSubmitEditing={() => emailRef.current?.focus()}
-              editable={!loading && !disabled}
-            />
+            <TextInput style={[modalStyles.input, errors.name ? modalStyles.inputError : null]} placeholder="Jane Doe" placeholderTextColor={MC.textFaint} value={form.name} onChangeText={v => setField('name', v)} returnKeyType="next" onSubmitEditing={() => emailRef.current?.focus()} editable={!loading && !disabled} />
           </Field>
-
           <Field label="Email" error={errors.email}>
-            <TextInput
-              ref={emailRef}
-              style={[modalStyles.input, errors.email ? modalStyles.inputError : null]}
-              placeholder="jane@company.com"
-              placeholderTextColor={MC.textFaint}
-              value={form.email}
-              onChangeText={v => setField('email', v)}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              returnKeyType="next"
-              onSubmitEditing={() => passwordRef.current?.focus()}
-              editable={!loading && !disabled}
-            />
+            <TextInput ref={emailRef} style={[modalStyles.input, errors.email ? modalStyles.inputError : null]} placeholder="jane@company.com" placeholderTextColor={MC.textFaint} value={form.email} onChangeText={v => setField('email', v)} keyboardType="email-address" autoCapitalize="none" returnKeyType="next" onSubmitEditing={() => passwordRef.current?.focus()} editable={!loading && !disabled} />
           </Field>
-
           <Field label="Password" error={errors.password}>
-            <TextInput
-              ref={passwordRef}
-              style={[modalStyles.input, errors.password ? modalStyles.inputError : null]}
-              placeholder="Minimum 6 characters"
-              placeholderTextColor={MC.textFaint}
-              value={form.password}
-              onChangeText={v => setField('password', v)}
-              secureTextEntry
-              returnKeyType="done"
-              editable={!loading && !disabled}
-            />
+            <TextInput ref={passwordRef} style={[modalStyles.input, errors.password ? modalStyles.inputError : null]} placeholder="Minimum 6 characters" placeholderTextColor={MC.textFaint} value={form.password} onChangeText={v => setField('password', v)} secureTextEntry returnKeyType="done" editable={!loading && !disabled} />
           </Field>
-
           <View style={modalStyles.roleInfoBox}>
             <User size={14} color={MC.blue} strokeWidth={2} />
-            <Text style={modalStyles.roleInfoText}>
-              New users created here are added as employees in your own team.
-            </Text>
+            <Text style={modalStyles.roleInfoText}>New users created here are added as employees in your own team.</Text>
           </View>
-
           <View style={modalStyles.divider} />
-
-          <TouchableOpacity
-            style={[modalStyles.createBtn, (loading || disabled) && { opacity: 0.6 }]}
-            onPress={handleCreate}
-            activeOpacity={0.82}
-            disabled={loading || disabled}
-          >
-            {loading ? (
-              <ActivityIndicator color={MC.bg} />
-            ) : (
-              <Text style={modalStyles.createBtnText}>
-                {disabled ? 'Offline' : 'Create Employee'}
-              </Text>
-            )}
+          <TouchableOpacity style={[modalStyles.createBtn, (loading || disabled) && { opacity: 0.6 }]} onPress={handleCreate} activeOpacity={0.82} disabled={loading || disabled}>
+            {loading ? <ActivityIndicator color={MC.bg} /> : <Text style={modalStyles.createBtnText}>{disabled ? 'Offline' : 'Create Employee'}</Text>}
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -686,38 +884,19 @@ function CreateModal({
 }
 
 // ─────────────────────────────────────────────────────────────────
-// EditModal
+// EditModal — unchanged
 // ─────────────────────────────────────────────────────────────────
 function EditModal({
-  visible,
-  employee,
-  onClose,
-  onSaved,
-  disabled,
+  visible, employee, onClose, onSaved, disabled,
 }: {
-  visible: boolean;
-  employee: Employee | null;
-  onClose: () => void;
-  onSaved: () => void;
-  disabled: boolean;
+  visible: boolean; employee: Employee | null; onClose: () => void; onSaved: () => void; disabled: boolean;
 }) {
-  const [form, setForm] = useState<EditForm>({
-    name: '',
-    role: 'employee',
-    is_active: true,
-  });
+  const [form, setForm] = useState<EditForm>({ name: '', role: 'employee', is_active: true });
   const [errors, setErrors] = useState<EditErrors>({});
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (employee) {
-      setForm({
-        name: employee.name,
-        role: employee.role,
-        is_active: employee.is_active,
-      });
-      setErrors({});
-    }
+    if (employee) { setForm({ name: employee.name, role: employee.role, is_active: employee.is_active }); setErrors({}); }
   }, [employee]);
 
   const validate = () => {
@@ -729,21 +908,11 @@ function EditModal({
 
   const handleSave = async () => {
     if (!employee) return;
-
-    if (disabled) {
-      Alert.alert('Offline', 'Connect to the internet to update this employee.');
-      return;
-    }
-
+    if (disabled) { Alert.alert('Offline', 'Connect to the internet to update this employee.'); return; }
     if (!validate()) return;
-
     setLoading(true);
     try {
-      await apiPatch(`/admin/employees/${employee.id}`, {
-        name: form.name.trim(),
-        role: form.role,
-        is_active: form.is_active,
-      });
+      await apiPatch(`/admin/employees/${employee.id}`, { name: form.name.trim(), role: form.role, is_active: form.is_active });
       onSaved();
     } catch (e: any) {
       Alert.alert('Error', e?.message ?? 'Failed to update employee');
@@ -753,126 +922,44 @@ function EditModal({
   };
 
   return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}
-    >
-      <KeyboardAvoidingView
-        style={{ flex: 1, backgroundColor: MC.bg }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <ScrollView
-          style={modalStyles.sheet}
-          contentContainerStyle={modalStyles.content}
-          keyboardShouldPersistTaps="handled"
-        >
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: MC.bg }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <ScrollView style={modalStyles.sheet} contentContainerStyle={modalStyles.content} keyboardShouldPersistTaps="handled">
           <View style={modalStyles.handle} />
-
           <View style={modalStyles.header}>
             <View>
               <Text style={modalStyles.title}>Edit Employee</Text>
-              <Text style={modalStyles.titleSub}>
-                Update role, name, or active status.
-              </Text>
+              <Text style={modalStyles.titleSub}>Update role, name, or active status.</Text>
             </View>
-
-            <TouchableOpacity
-              onPress={onClose}
-              style={modalStyles.closeBtn}
-              hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
-            >
+            <TouchableOpacity onPress={onClose} style={modalStyles.closeBtn} hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}>
               <X size={14} color={MC.textSub} strokeWidth={2.5} />
             </TouchableOpacity>
           </View>
-
           <Field label="Full Name" error={errors.name}>
-            <TextInput
-              style={[modalStyles.input, errors.name ? modalStyles.inputError : null]}
-              placeholder="Jane Doe"
-              placeholderTextColor={MC.textFaint}
-              value={form.name}
-              onChangeText={v => {
-                setForm(f => ({ ...f, name: v }));
-                setErrors(e => ({ ...e, name: undefined }));
-              }}
-              editable={!loading && !disabled}
-            />
+            <TextInput style={[modalStyles.input, errors.name ? modalStyles.inputError : null]} placeholder="Jane Doe" placeholderTextColor={MC.textFaint} value={form.name} onChangeText={v => { setForm(f => ({ ...f, name: v })); setErrors(e => ({ ...e, name: undefined })); }} editable={!loading && !disabled} />
           </Field>
-
           <Field label="Role">
             <View style={editStyles.roleRow}>
-              <TouchableOpacity
-                style={[
-                  editStyles.roleBtn,
-                  form.role === 'employee' && editStyles.roleBtnActive,
-                ]}
-                onPress={() => setForm(f => ({ ...f, role: 'employee' }))}
-                disabled={loading || disabled}
-              >
-                <Text style={[
-                  editStyles.roleBtnText,
-                  form.role === 'employee' && editStyles.roleBtnTextActive,
-                ]}>
-                  Employee
-                </Text>
+              <TouchableOpacity style={[editStyles.roleBtn, form.role === 'employee' && editStyles.roleBtnActive]} onPress={() => setForm(f => ({ ...f, role: 'employee' }))} disabled={loading || disabled}>
+                <Text style={[editStyles.roleBtnText, form.role === 'employee' && editStyles.roleBtnTextActive]}>Employee</Text>
               </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  editStyles.roleBtn,
-                  form.role === 'admin' && editStyles.roleBtnActiveGold,
-                ]}
-                onPress={() => setForm(f => ({ ...f, role: 'admin' }))}
-                disabled={loading || disabled}
-              >
-                <Text style={[
-                  editStyles.roleBtnText,
-                  form.role === 'admin' && editStyles.roleBtnTextActiveGold,
-                ]}>
-                  Admin
-                </Text>
+              <TouchableOpacity style={[editStyles.roleBtn, form.role === 'admin' && editStyles.roleBtnActiveGold]} onPress={() => setForm(f => ({ ...f, role: 'admin' }))} disabled={loading || disabled}>
+                <Text style={[editStyles.roleBtnText, form.role === 'admin' && editStyles.roleBtnTextActiveGold]}>Admin</Text>
               </TouchableOpacity>
             </View>
           </Field>
-
           <Field label="Active Status">
             <View style={editStyles.switchRow}>
               <View>
-                <Text style={editStyles.switchTitle}>
-                  {form.is_active ? 'Active' : 'Inactive'}
-                </Text>
-                <Text style={editStyles.switchSub}>
-                  Inactive users cannot use the app until re-enabled.
-                </Text>
+                <Text style={editStyles.switchTitle}>{form.is_active ? 'Active' : 'Inactive'}</Text>
+                <Text style={editStyles.switchSub}>Inactive users cannot use the app until re-enabled.</Text>
               </View>
-
-              <Switch
-                value={form.is_active}
-                onValueChange={v => setForm(f => ({ ...f, is_active: v }))}
-                disabled={loading || disabled}
-                trackColor={{ false: MC.surfaceLift, true: `${MC.green}66` }}
-                thumbColor={form.is_active ? MC.green : MC.textSub}
-              />
+              <Switch value={form.is_active} onValueChange={v => setForm(f => ({ ...f, is_active: v }))} disabled={loading || disabled} trackColor={{ false: MC.surfaceLift, true: `${MC.green}66` }} thumbColor={form.is_active ? MC.green : MC.textSub} />
             </View>
           </Field>
-
           <View style={modalStyles.divider} />
-
-          <TouchableOpacity
-            style={[modalStyles.createBtn, (loading || disabled) && { opacity: 0.6 }]}
-            onPress={handleSave}
-            activeOpacity={0.82}
-            disabled={loading || disabled}
-          >
-            {loading ? (
-              <ActivityIndicator color={MC.bg} />
-            ) : (
-              <Text style={modalStyles.createBtnText}>
-                {disabled ? 'Offline' : 'Save Changes'}
-              </Text>
-            )}
+          <TouchableOpacity style={[modalStyles.createBtn, (loading || disabled) && { opacity: 0.6 }]} onPress={handleSave} activeOpacity={0.82} disabled={loading || disabled}>
+            {loading ? <ActivityIndicator color={MC.bg} /> : <Text style={modalStyles.createBtnText}>{disabled ? 'Offline' : 'Save Changes'}</Text>}
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -881,184 +968,40 @@ function EditModal({
 }
 
 const editStyles = StyleSheet.create({
-  roleRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  roleBtn: {
-    flex: 1,
-    backgroundColor: MC.surface,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: MC.border,
-    paddingVertical: 13,
-    alignItems: 'center',
-  },
-  roleBtnActive: {
-    backgroundColor: MC.blueDim,
-    borderColor: `${MC.blue}44`,
-  },
-  roleBtnActiveGold: {
-    backgroundColor: MC.goldDim,
-    borderColor: `${MC.gold}44`,
-  },
-  roleBtnText: {
-    color: MC.textSub,
-    fontFamily: MF.mono,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  roleBtnTextActive: {
-    color: MC.blue,
-  },
-  roleBtnTextActiveGold: {
-    color: MC.gold,
-  },
-  switchRow: {
-    backgroundColor: MC.surface,
-    borderWidth: 1,
-    borderColor: MC.border,
-    borderTopColor: MC.borderBright,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 12,
-  },
-  switchTitle: {
-    color: MC.textPrimary,
-    fontSize: 13,
-    fontWeight: '700',
-    fontFamily: MF.display,
-  },
-  switchSub: {
-    color: MC.textFaint,
-    fontSize: 11,
-    fontFamily: MF.mono,
-    marginTop: 4,
-    maxWidth: 220,
-  },
+  roleRow: { flexDirection: 'row', gap: 10 },
+  roleBtn: { flex: 1, backgroundColor: MC.surface, borderRadius: 12, borderWidth: 1, borderColor: MC.border, paddingVertical: 13, alignItems: 'center' },
+  roleBtnActive: { backgroundColor: MC.blueDim, borderColor: `${MC.blue}44` },
+  roleBtnActiveGold: { backgroundColor: MC.goldDim, borderColor: `${MC.gold}44` },
+  roleBtnText: { color: MC.textSub, fontFamily: MF.mono, fontSize: 12, fontWeight: '700' },
+  roleBtnTextActive: { color: MC.blue },
+  roleBtnTextActiveGold: { color: MC.gold },
+  switchRow: { backgroundColor: MC.surface, borderWidth: 1, borderColor: MC.border, borderTopColor: MC.borderBright, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+  switchTitle: { color: MC.textPrimary, fontSize: 13, fontWeight: '700', fontFamily: MF.display },
+  switchSub: { color: MC.textFaint, fontSize: 11, fontFamily: MF.mono, marginTop: 4, maxWidth: 220 },
 });
 
 const modalStyles = StyleSheet.create({
   sheet: { flex: 1, backgroundColor: MC.bg },
   content: { padding: 24, paddingBottom: 52 },
-  handle: {
-    alignSelf: 'center',
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: MC.borderBright,
-    marginBottom: 20,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 28,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: MC.textPrimary,
-    fontFamily: MF.display,
-  },
-  titleSub: {
-    fontSize: 11,
-    color: MC.textFaint,
-    fontFamily: MF.mono,
-    marginTop: 3,
-  },
-  closeBtn: {
-    backgroundColor: MC.surfaceLift,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: MC.border,
-  },
+  handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: MC.borderBright, marginBottom: 20 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 },
+  title: { fontSize: 22, fontWeight: '800', color: MC.textPrimary, fontFamily: MF.display },
+  titleSub: { fontSize: 11, color: MC.textFaint, fontFamily: MF.mono, marginTop: 3 },
+  closeBtn: { backgroundColor: MC.surfaceLift, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: MC.border },
   fieldWrap: { marginBottom: 18 },
-  label: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: MC.textFaint,
-    fontFamily: MF.mono,
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    marginBottom: 8,
-  },
-  input: {
-    backgroundColor: MC.surface,
-    borderWidth: 1,
-    borderColor: MC.border,
-    borderTopColor: MC.borderBright,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    fontSize: 14,
-    color: MC.textPrimary,
-    fontFamily: MF.mono,
-  },
-  inputError: {
-    borderColor: MC.rose,
-    borderTopColor: MC.rose,
-  },
-  errorText: {
-    fontSize: 11,
-    color: MC.rose,
-    fontFamily: MF.mono,
-    marginTop: 5,
-  },
-  roleInfoBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: MC.blueDim,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: `${MC.blue}33`,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    marginTop: 4,
-  },
-  roleInfoText: {
-    flex: 1,
-    fontSize: 11,
-    color: MC.blue,
-    fontFamily: MF.mono,
-    lineHeight: 16,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: MC.border,
-    marginVertical: 20,
-  },
-  createBtn: {
-    backgroundColor: MC.green,
-    borderRadius: 14,
-    paddingVertical: 15,
-    alignItems: 'center',
-    shadowColor: MC.green,
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.4,
-    shadowRadius: 14,
-    elevation: 8,
-  },
-  createBtnText: {
-    color: MC.bg,
-    fontWeight: '800',
-    fontSize: 14,
-    fontFamily: MF.mono,
-    letterSpacing: 0.5,
-  },
+  label: { fontSize: 10, fontWeight: '700', color: MC.textFaint, fontFamily: MF.mono, letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 8 },
+  input: { backgroundColor: MC.surface, borderWidth: 1, borderColor: MC.border, borderTopColor: MC.borderBright, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13, fontSize: 14, color: MC.textPrimary, fontFamily: MF.mono },
+  inputError: { borderColor: MC.rose, borderTopColor: MC.rose },
+  errorText: { fontSize: 11, color: MC.rose, fontFamily: MF.mono, marginTop: 5 },
+  roleInfoBox: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: MC.blueDim, borderRadius: 12, borderWidth: 1, borderColor: `${MC.blue}33`, paddingHorizontal: 12, paddingVertical: 12, marginTop: 4 },
+  roleInfoText: { flex: 1, fontSize: 11, color: MC.blue, fontFamily: MF.mono, lineHeight: 16 },
+  divider: { height: 1, backgroundColor: MC.border, marginVertical: 20 },
+  createBtn: { backgroundColor: MC.green, borderRadius: 14, paddingVertical: 15, alignItems: 'center', shadowColor: MC.green, shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.4, shadowRadius: 14, elevation: 8 },
+  createBtnText: { color: MC.bg, fontWeight: '800', fontSize: 14, fontFamily: MF.mono, letterSpacing: 0.5 },
 });
 
 // ─────────────────────────────────────────────────────────────────
-// Header
+// ScreenHeader — unchanged
 // ─────────────────────────────────────────────────────────────────
 function ScreenHeader({ total }: { total: number }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -1085,46 +1028,12 @@ function ScreenHeader({ total }: { total: number }) {
 }
 
 const hdrStyles = StyleSheet.create({
-  wrap: {
-    paddingHorizontal: 16,
-    paddingTop: 20,
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: MC.border,
-  },
-  titleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 4,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: MC.textPrimary,
-    fontFamily: MF.display,
-    letterSpacing: 0.3,
-  },
-  chip: {
-    backgroundColor: MC.blueDim,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderWidth: 1,
-    borderColor: `${MC.blue}44`,
-  },
-  chipText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: MC.blue,
-    fontFamily: MF.mono,
-    letterSpacing: 0.5,
-  },
-  sub: {
-    fontSize: 11,
-    color: MC.textFaint,
-    fontFamily: MF.mono,
-  },
+  wrap: { paddingHorizontal: 16, paddingTop: 20, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: MC.border },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
+  title: { fontSize: 20, fontWeight: '800', color: MC.textPrimary, fontFamily: MF.display, letterSpacing: 0.3 },
+  chip: { backgroundColor: MC.blueDim, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3, borderWidth: 1, borderColor: `${MC.blue}44` },
+  chipText: { fontSize: 10, fontWeight: '700', color: MC.blue, fontFamily: MF.mono, letterSpacing: 0.5 },
+  sub: { fontSize: 11, color: MC.textFaint, fontFamily: MF.mono },
 });
 
 // ─────────────────────────────────────────────────────────────────
@@ -1142,10 +1051,13 @@ export default function EmployeesScreen() {
   const [search, setSearch] = useState('');
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
+  // ActionSheet state
+  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
+  const [showActionSheet, setShowActionSheet] = useState(false);
+
   const fetchEmployees = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
-
     try {
       const data = await apiGet<Employee[]>('/admin/employees');
       setEmployees(Array.isArray(data) ? data : []);
@@ -1158,32 +1070,32 @@ export default function EmployeesScreen() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchEmployees();
-  }, [fetchEmployees]);
+  useEffect(() => { fetchEmployees(); }, [fetchEmployees]);
 
-  const handleCall = useCallback((employee: Employee) => {
+  // Row tap → open action sheet
+  const handleRowPress = useCallback((employee: Employee) => {
+    setSelectedEmployee(employee);
+    setShowActionSheet(true);
+  }, []);
+
+  // Sheet actions
+  const handleSheetCall = useCallback((employee: Employee) => {
     if (!employee.fcm_token) {
       Alert.alert('Cannot Call', `${employee.name} has not logged in on any device yet.`);
       return;
     }
-
-    navigation.navigate('Call', {
-      employeeId: employee.id,
-      employeeName: employee.name,
-    });
+    navigation.navigate('Call', { employeeId: employee.id, employeeName: employee.name });
   }, [navigation]);
 
-  const handleEdit = useCallback((employee: Employee) => {
+  const handleSheetEdit = useCallback((employee: Employee) => {
     setEditingEmployee(employee);
   }, []);
 
-  const handleDelete = useCallback((employee: Employee) => {
+  const handleSheetDelete = useCallback((employee: Employee) => {
     if (!isOnline) {
       Alert.alert('Offline', 'Connect to the internet to delete this employee.');
       return;
     }
-
     Alert.alert(
       'Delete Employee',
       `Are you sure you want to delete ${employee.name}? This action cannot be undone.`,
@@ -1212,8 +1124,7 @@ export default function EmployeesScreen() {
 
   const query = search.trim().toLowerCase();
   const filtered = employees.filter(e =>
-    e.name.toLowerCase().includes(query) ||
-    e.email.toLowerCase().includes(query),
+    e.name.toLowerCase().includes(query) || e.email.toLowerCase().includes(query),
   );
 
   return (
@@ -1230,6 +1141,7 @@ export default function EmployeesScreen() {
       <View style={s.container}>
         <ScreenHeader total={employees.length} />
 
+        {/* Toolbar */}
         <View style={s.toolbar}>
           <View style={s.searchWrap}>
             <Search size={14} color={MC.textFaint} strokeWidth={2} />
@@ -1242,10 +1154,7 @@ export default function EmployeesScreen() {
               returnKeyType="search"
             />
             {search.length > 0 && (
-              <TouchableOpacity
-                onPress={() => setSearch('')}
-                hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-              >
+              <TouchableOpacity onPress={() => setSearch('')} hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}>
                 <X size={13} color={MC.textFaint} strokeWidth={2.5} />
               </TouchableOpacity>
             )}
@@ -1254,13 +1163,7 @@ export default function EmployeesScreen() {
           <TouchableOpacity
             style={[s.addBtn, !isOnline && { opacity: 0.6 }]}
             onPress={() => {
-              if (!isOnline) {
-                Alert.alert(
-                  'Offline',
-                  'You are offline. Connect to the internet to add a new employee.',
-                );
-                return;
-              }
+              if (!isOnline) { Alert.alert('Offline', 'Connect to the internet to add a new employee.'); return; }
               setShowCreate(true);
             }}
             activeOpacity={0.82}
@@ -1292,14 +1195,12 @@ export default function EmployeesScreen() {
             data={filtered}
             keyExtractor={e => e.id}
             contentContainerStyle={filtered.length === 0 ? s.emptyList : s.list}
-            ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+            ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
             renderItem={({ item, index }) => (
               <EmployeeRow
                 employee={item}
                 index={index}
-                onCall={handleCall}
-                onEdit={handleEdit}
-                onDelete={handleDelete}
+                onPress={handleRowPress}
               />
             )}
             ListEmptyComponent={<EmptyState hasSearch={search.length > 0} />}
@@ -1339,13 +1240,23 @@ export default function EmployeesScreen() {
           disabled={!isOnline}
         />
       </View>
+
+      {/* ActionSheet renders outside the scrollable container so it overlays everything */}
+      <ActionSheet
+        employee={selectedEmployee}
+        visible={showActionSheet}
+        onClose={() => setShowActionSheet(false)}
+        onCall={handleSheetCall}
+        onEdit={handleSheetEdit}
+        onDelete={handleSheetDelete}
+        isOnline={isOnline}
+      />
     </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: MC.bg },
-
   offlineBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1356,13 +1267,7 @@ const s = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: `${MC.rose}44`,
   },
-  offlineText: {
-    flex: 1,
-    fontSize: 11,
-    color: MC.rose,
-    fontFamily: MF.mono,
-  },
-
+  offlineText: { flex: 1, fontSize: 11, color: MC.rose, fontFamily: MF.mono },
   container: { flex: 1, backgroundColor: MC.bg },
   toolbar: {
     flexDirection: 'row',
@@ -1405,12 +1310,7 @@ const s = StyleSheet.create({
     shadowRadius: 10,
     elevation: 6,
   },
-  addBtnText: {
-    color: MC.bg,
-    fontWeight: '800',
-    fontSize: 13,
-    fontFamily: MF.mono,
-  },
+  addBtnText: { color: MC.bg, fontWeight: '800', fontSize: 13, fontFamily: MF.mono },
   resultsLabel: {
     fontSize: 10,
     color: MC.textFaint,
@@ -1428,9 +1328,5 @@ const s = StyleSheet.create({
     paddingHorizontal: 18,
     paddingTop: 10,
   },
-  actionOverlayText: {
-    color: MC.textSub,
-    fontFamily: MF.mono,
-    fontSize: 11,
-  },
+  actionOverlayText: { color: MC.textSub, fontFamily: MF.mono, fontSize: 11 },
 });
