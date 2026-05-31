@@ -4,7 +4,8 @@ import uuid from 'react-native-uuid';
 import {
   NotificationRecord,
   CallLogRecord,
-} from '../screens/employee/EmployeeNotificationsScreen';
+  CallLogStatus,
+} from '../types/inbox';
 
 const NOTIF_KEY = 'employee_notifications';
 const CALL_KEY = 'employee_call_logs';
@@ -14,7 +15,6 @@ async function readList<T>(key: string): Promise<T[]> {
   try {
     const raw = await AsyncStorage.getItem(key);
     if (!raw) return [];
-
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as T[]) : [];
   } catch (error) {
@@ -25,15 +25,11 @@ async function readList<T>(key: string): Promise<T[]> {
 
 async function writeList<T>(key: string, items: T[]): Promise<void> {
   try {
-    await AsyncStorage.setItem(key, JSON.stringify(items));
+    await AsyncStorage.setItem(key, JSON.stringify(items.slice(0, MAX_ITEMS)));
   } catch (error) {
     console.warn(`[inboxHelpers] Failed to write key "${key}"`, error);
     throw error;
   }
-}
-
-function trimList<T>(items: T[]): T[] {
-  return items.slice(0, MAX_ITEMS);
 }
 
 export async function saveNotification(
@@ -43,42 +39,24 @@ export async function saveNotification(
 ): Promise<NotificationRecord> {
   const existing = await readList<NotificationRecord>(NOTIF_KEY);
 
-  const normalizedTitle = title?.trim() || 'Notification';
-  const normalizedBody = body?.trim() || '';
-  const normalizedSentBy = sentBy?.trim() || 'Admin';
-
-  const duplicate = existing.find(
-    item =>
-      item.title === normalizedTitle &&
-      item.body === normalizedBody &&
-      item.sentBy === normalizedSentBy &&
-      Math.abs(
-        new Date(item.sentAt).getTime() - Date.now(),
-      ) < 5000,
-  );
-
-  if (duplicate) {
-    return duplicate;
-  }
-
   const record: NotificationRecord = {
     id: String(uuid.v4()),
     type: 'notification',
-    title: normalizedTitle,
-    body: normalizedBody,
-    sentBy: normalizedSentBy,
+    title: title?.trim() || 'Notification',
+    body: body?.trim() || '',
+    sentBy: sentBy?.trim() || 'Admin',
     sentAt: new Date().toISOString(),
     read: false,
   };
 
-  await writeList(NOTIF_KEY, trimList([record, ...existing]));
+  await writeList(NOTIF_KEY, [record, ...existing]);
   return record;
 }
 
 export async function saveCallLog(
   callerName: string,
   callerPhone: string,
-  status: CallLogRecord['status'],
+  status: CallLogStatus,
   duration = 0,
 ): Promise<CallLogRecord> {
   const existing = await readList<CallLogRecord>(CALL_KEY);
@@ -93,45 +71,40 @@ export async function saveCallLog(
     timestamp: new Date().toISOString(),
   };
 
-  await writeList(CALL_KEY, trimList([record, ...existing]));
+  await writeList(CALL_KEY, [record, ...existing]);
   return record;
 }
 
-export async function upsertCallLog(
-  match: Partial<Pick<CallLogRecord, 'callerName' | 'callerPhone'>>,
-  updates: Partial<Omit<CallLogRecord, 'id' | 'type'>>,
+export async function upsertLatestCallLog(
+  callerName: string,
+  callerPhone: string,
+  status: CallLogStatus,
+  duration = 0,
 ): Promise<CallLogRecord> {
   const existing = await readList<CallLogRecord>(CALL_KEY);
 
   const index = existing.findIndex(
     item =>
-      (match.callerPhone && item.callerPhone === match.callerPhone) ||
-      (match.callerName && item.callerName === match.callerName),
+      item.callerPhone === (callerPhone?.trim() || '') &&
+      item.callerName === (callerName?.trim() || 'Unknown'),
   );
 
   if (index === -1) {
-    return saveCallLog(
-      updates.callerName ?? match.callerName ?? 'Unknown',
-      updates.callerPhone ?? match.callerPhone ?? '',
-      updates.status ?? 'missed',
-      updates.duration ?? 0,
-    );
+    return saveCallLog(callerName, callerPhone, status, duration);
   }
 
-  const updatedRecord: CallLogRecord = {
+  const updated: CallLogRecord = {
     ...existing[index],
-    ...updates,
+    status,
+    duration,
+    callerName: callerName?.trim() || existing[index].callerName,
+    callerPhone: callerPhone?.trim() || existing[index].callerPhone,
   };
 
-  const updatedList = [...existing];
-  updatedList[index] = updatedRecord;
-
-  updatedList.sort(
-    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-  );
-
-  await writeList(CALL_KEY, trimList(updatedList));
-  return updatedRecord;
+  const next = [...existing];
+  next[index] = updated;
+  await writeList(CALL_KEY, next);
+  return updated;
 }
 
 export async function getNotifications(): Promise<NotificationRecord[]> {
@@ -149,17 +122,19 @@ export async function getCallLogs(): Promise<CallLogRecord[]> {
 }
 
 export async function markNotificationAsRead(id: string): Promise<void> {
-  const notifications = await readList<NotificationRecord>(NOTIF_KEY);
-  const updated = notifications.map(item =>
-    item.id === id ? { ...item, read: true } : item,
+  const items = await readList<NotificationRecord>(NOTIF_KEY);
+  await writeList(
+    NOTIF_KEY,
+    items.map(item => (item.id === id ? { ...item, read: true } : item)),
   );
-  await writeList(NOTIF_KEY, updated);
 }
 
 export async function markAllNotificationsAsRead(): Promise<void> {
-  const notifications = await readList<NotificationRecord>(NOTIF_KEY);
-  const updated = notifications.map(item => ({ ...item, read: true }));
-  await writeList(NOTIF_KEY, updated);
+  const items = await readList<NotificationRecord>(NOTIF_KEY);
+  await writeList(
+    NOTIF_KEY,
+    items.map(item => ({ ...item, read: true })),
+  );
 }
 
 export async function clearNotifications(): Promise<void> {

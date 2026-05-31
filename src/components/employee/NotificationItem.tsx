@@ -1,7 +1,8 @@
+// src/components/employee/NotificationItem.tsx
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Bell, Circle } from 'lucide-react-native';
-import { NotificationRecord } from '../../screens/employee/EmployeeNotificationsScreen';
+import type { NotificationRecord } from '../../types/inbox';
 
 type Props = {
   item: NotificationRecord;
@@ -24,7 +25,11 @@ export function NotificationItem({ item, onRead }: Props) {
       activeOpacity={0.85}>
       <View style={styles.iconWrap}>
         <View style={[styles.iconBadge, !item.read && styles.iconBadgeUnread]}>
-          <Bell size={18} color={!item.read ? '#6366F1' : '#6B7280'} strokeWidth={2.2} />
+          <Bell
+            size={18}
+            color={!item.read ? '#6366F1' : '#6B7280'}
+            strokeWidth={2.2}
+          />
         </View>
 
         {!item.read && (

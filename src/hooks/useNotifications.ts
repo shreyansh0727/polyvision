@@ -23,7 +23,7 @@ import notifee, {
 import { useAuthStore } from '../store/authStore';
 import { apiPost } from '../services/api';
 import { navigationRef } from '../navigation/navigationRef';
-import { saveNotification, saveCallLog } from '../utils/inboxHelpers';
+import { saveNotification, saveCallLog, upsertLatestCallLog } from '../utils/inboxHelpers';
 
 const CHANNEL_CALL = 'incoming_call';
 const CHANNEL_GENERAL = 'general';
@@ -70,22 +70,10 @@ async function showCallNotification(
         launchActivity: 'default',
         launchActivityFlags: [AndroidLaunchActivityFlag.SINGLE_TOP],
       },
-      pressAction: {
-        id: 'default',
-        launchActivity: 'default',
-      },
+      pressAction: { id: 'default', launchActivity: 'default' },
       actions: [
-        {
-          title: '✅ Accept',
-          pressAction: {
-            id: 'accept',
-            launchActivity: 'default',
-          },
-        },
-        {
-          title: '❌ Decline',
-          pressAction: { id: 'decline' },
-        },
+        { title: '✅ Accept', pressAction: { id: 'accept', launchActivity: 'default' } },
+        { title: '❌ Decline', pressAction: { id: 'decline' } },
       ],
       vibrationPattern: VIBRATION_PATTERN,
       sound: 'default',
@@ -118,7 +106,6 @@ async function setupIOSCallCategory(): Promise<void> {
 
 function navigateToCall(data: Record<string, string>): void {
   if (!navigationRef.isReady()) {
-    console.warn('[FCM] navigateToCall: navigator not ready, retrying in 500ms…');
     setTimeout(() => {
       if (navigationRef.isReady()) {
         navigationRef.navigate('IncomingCall', {
@@ -146,30 +133,27 @@ function setupNotifeeListeners(): () => void {
   return notifee.onForegroundEvent(async ({ type, detail }) => {
     const actionId = detail.pressAction?.id;
     const data = detail.notification?.data as Record<string, string> | undefined;
+    if (!data) return;
 
-    const isAccept =
-      (type === EventType.ACTION_PRESS && actionId === 'accept') ||
-      type === EventType.PRESS;
+    const callerName = data.caller_name ?? 'Admin';
+    const callerPhone = data.caller_phone ?? '';
 
-    if (isAccept && data) {
+    if (type === EventType.ACTION_PRESS && actionId === 'accept') {
       await cancelCallNotification();
-      await saveCallLog(
-        data.caller_name ?? 'Admin',
-        data.caller_phone ?? '',
-        'answered',
-        0,
-      );
+      await upsertLatestCallLog(callerName, callerPhone, 'answered', 0);
       navigateToCall(data);
+      return;
     }
 
-    if (type === EventType.ACTION_PRESS && actionId === 'decline' && data) {
+    if (type === EventType.ACTION_PRESS && actionId === 'decline') {
       await cancelCallNotification();
-      await saveCallLog(
-        data.caller_name ?? 'Admin',
-        data.caller_phone ?? '',
-        'rejected',
-        0,
-      );
+      await upsertLatestCallLog(callerName, callerPhone, 'rejected', 0);
+      return;
+    }
+
+    if (type === EventType.PRESS) {
+      await cancelCallNotification();
+      navigateToCall(data);
     }
   });
 }
@@ -187,37 +171,28 @@ async function requestAndroidPermission(): Promise<boolean> {
     },
   );
 
-  const granted = result === PermissionsAndroid.RESULTS.GRANTED;
-  if (!granted) console.warn('[FCM] POST_NOTIFICATIONS denied');
-  return granted;
+  return result === PermissionsAndroid.RESULTS.GRANTED;
 }
 
 async function requestFirebasePermission(): Promise<boolean> {
   const status = await requestPermission(getMessaging());
-  const authorized =
+  return (
     status === AuthorizationStatus.AUTHORIZED ||
-    status === AuthorizationStatus.PROVISIONAL;
-
-  if (!authorized) console.warn('[FCM] Firebase permission not granted:', status);
-  return authorized;
+    status === AuthorizationStatus.PROVISIONAL
+  );
 }
 
 async function registerToken(employeeId: string): Promise<void> {
   try {
     const token = await getToken(getMessaging());
-    if (!token) {
-      console.warn('[FCM] getToken() returned empty — APNs may not be ready');
-      return;
-    }
-
+    if (!token) return;
     await apiPost('/employees/fcm-token', { employee_id: employeeId, token });
-    console.log('[FCM] Token registered:', token.slice(0, 24) + '…');
   } catch (e) {
     console.warn('[FCM] Token registration failed:', e);
   }
 }
 
-async function routeMessage(
+export async function routeMessage(
   message: FirebaseMessagingTypes.RemoteMessage,
   source: 'foreground' | 'background' = 'foreground',
 ): Promise<void> {
@@ -225,10 +200,7 @@ async function routeMessage(
 
   switch (data.type) {
     case 'call_invite': {
-      if (!data.channel || !data.token || !data.app_id) {
-        console.warn('[FCM] call_invite missing required fields:', data);
-        return;
-      }
+      if (!data.channel || !data.token || !data.app_id) return;
 
       const callerName = data.caller_name ?? 'Admin';
       const callerPhone = data.caller_phone ?? '';
@@ -238,25 +210,13 @@ async function routeMessage(
       if (source === 'foreground') {
         navigateToCall(data);
       } else {
-        await cancelCallNotification();
-        navigateToCall(data);
+        await showCallNotification(callerName, data);
       }
       break;
     }
 
     case 'call_ended': {
       await cancelCallNotification();
-
-      const currentRoute = navigationRef.getCurrentRoute();
-      const routeName = currentRoute?.name as string | undefined;
-
-      if (
-        navigationRef.isReady() &&
-        navigationRef.canGoBack() &&
-        (routeName === 'IncomingCall' || routeName === 'EmployeeActiveCall')
-      ) {
-        navigationRef.goBack();
-      }
       break;
     }
 
@@ -267,12 +227,14 @@ async function routeMessage(
 
       await saveNotification(title, body, sentBy);
 
-      await notifee.displayNotification({
-        title,
-        body,
-        android: { channelId: CHANNEL_GENERAL },
-        ios: {},
-      });
+      if (source === 'foreground') {
+        await notifee.displayNotification({
+          title,
+          body,
+          android: { channelId: CHANNEL_GENERAL },
+          ios: {},
+        });
+      }
       break;
     }
   }

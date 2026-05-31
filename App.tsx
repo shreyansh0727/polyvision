@@ -11,6 +11,7 @@ import {
   Animated,
   ScrollView,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getAuth, onAuthStateChanged } from '@react-native-firebase/auth';
@@ -18,11 +19,15 @@ import { ArrowDownToLine, X, Layers } from 'lucide-react-native';
 
 import { useAuthStore } from './src/store/authStore';
 import Navigation from './src/navigation';
+import { navigationRef } from './src/navigation/navigationRef';
 import { useOtaUpdate } from './src/hooks/useOtaUpdate';
 import { useNetworkMonitor } from './src/hooks/useNetworkMonitor';
+import { useNotifications } from './src/hooks/useNotifications';
 import { OfflineBanner } from './src/components/OfflineBanner';
 import { useInternalAppUpdate } from './src/hooks/useInternalAppUpdate';
 import { MC, MF } from './src/navigation/AppTheme';
+
+const PENDING_CALL_KEY = '@pending_call_data';
 
 type InternalUpdate = NonNullable<ReturnType<typeof useInternalAppUpdate>['update']>;
 
@@ -34,7 +39,6 @@ function parseNotes(notes?: string | null): string[] {
     .filter(Boolean);
 }
 
-// ─── Bottom-sheet update popup ───────────────────────────────────────────────
 function UpdateSheet({
   visible,
   update,
@@ -87,8 +91,7 @@ function UpdateSheet({
       transparent
       animationType="fade"
       statusBarTranslucent
-      onRequestClose={dismiss}
-    >
+      onRequestClose={dismiss}>
       <Pressable style={styles.sheetBackdrop} onPress={dismiss}>
         <Animated.View
           style={[
@@ -97,11 +100,9 @@ function UpdateSheet({
               paddingBottom: insets.bottom + 12,
               transform: [{ translateY: slideY }],
             },
-          ]}
-        >
+          ]}>
           <Pressable onPress={() => {}}>
             <View style={styles.sheetHandle} />
-
             <View style={styles.sheetHeader}>
               <View style={styles.sheetIconWrap}>
                 <Layers size={20} color={MC.blue} />
@@ -119,10 +120,7 @@ function UpdateSheet({
               <TouchableOpacity
                 style={styles.sheetCloseBtn}
                 onPress={dismiss}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel="Dismiss update sheet"
-              >
+                hitSlop={8}>
                 <X size={13} color={MC.textSub} />
               </TouchableOpacity>
             </View>
@@ -133,8 +131,7 @@ function UpdateSheet({
                 <ScrollView
                   style={styles.notesScroll}
                   showsVerticalScrollIndicator={false}
-                  nestedScrollEnabled
-                >
+                  nestedScrollEnabled>
                   {noteLines.map((line, i) => (
                     <View key={`${line}-${i}`} style={styles.noteRow}>
                       <View style={styles.noteDot} />
@@ -151,10 +148,7 @@ function UpdateSheet({
                 dismiss();
                 onDownload();
               }}
-              activeOpacity={0.88}
-              accessibilityRole="button"
-              accessibilityLabel="Download APK"
-            >
+              activeOpacity={0.88}>
               <ArrowDownToLine size={15} color={MC.bg} />
               <Text style={styles.downloadBtnText}>Download APK</Text>
             </TouchableOpacity>
@@ -162,10 +156,7 @@ function UpdateSheet({
             <TouchableOpacity
               style={styles.laterBtn}
               onPress={dismiss}
-              activeOpacity={0.6}
-              accessibilityRole="button"
-              accessibilityLabel="Remind me later"
-            >
+              activeOpacity={0.6}>
               <Text style={styles.laterBtnText}>Remind me later</Text>
             </TouchableOpacity>
           </Pressable>
@@ -175,7 +166,6 @@ function UpdateSheet({
   );
 }
 
-// ─── Slim persistent banner ───────────────────────────────────────────────────
 function UpdateBanner({
   update,
   onDownload,
@@ -201,10 +191,7 @@ function UpdateBanner({
       <TouchableOpacity
         style={styles.bannerBtn}
         onPress={onDownload}
-        activeOpacity={0.85}
-        accessibilityRole="button"
-        accessibilityLabel="Download app update"
-      >
+        activeOpacity={0.85}>
         <Text style={styles.bannerBtnText}>Update</Text>
       </TouchableOpacity>
 
@@ -212,10 +199,7 @@ function UpdateBanner({
         <TouchableOpacity
           style={styles.bannerDismiss}
           onPress={onDismiss}
-          hitSlop={8}
-          accessibilityRole="button"
-          accessibilityLabel="Dismiss update banner"
-        >
+          hitSlop={8}>
           <X size={12} color={`${MC.bg}99`} />
         </TouchableOpacity>
       )}
@@ -223,13 +207,11 @@ function UpdateBanner({
   );
 }
 
-// ─── Root ─────────────────────────────────────────────────────────────────────
 export default function App() {
   useNetworkMonitor();
   useOtaUpdate();
 
   const { update: appUpdate, openDownload } = useInternalAppUpdate();
-
   const [firebaseReady, setFirebaseReady] = useState(false);
   const [popupDismissed, setPopupDismissed] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(false);
@@ -254,72 +236,127 @@ export default function App() {
 
   if (!firebaseReady) return null;
 
-  const showUpdate = !!appUpdate?.needsUpdate && !appUpdate?.force;
-  const showPopup = showUpdate && !popupDismissed;
-  const showBanner = showUpdate && popupDismissed && !bannerDismissed;
-
   return (
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaProvider>
-        <View style={styles.root}>
-          <StatusBar barStyle="light-content" backgroundColor={MC.bg} />
-
-          {showBanner && appUpdate && (
-            <UpdateBanner
-              update={appUpdate}
-              onDownload={openDownload}
-              onDismiss={() => setBannerDismissed(true)}
-            />
-          )}
-
-          <OfflineBanner />
-          <Navigation />
-
-          {showUpdate && appUpdate && (
-            <UpdateSheet
-              visible={showPopup}
-              update={appUpdate}
-              onDownload={openDownload}
-              onDismiss={() => setPopupDismissed(true)}
-            />
-          )}
-
-          {appUpdate?.force && (
-            <View style={styles.forceOverlay}>
-              <View style={styles.forceCard}>
-                <Text style={styles.forceTitle}>Update required</Text>
-                <Text style={styles.forceSub}>
-                  Please install the latest build to continue using the app.
-                </Text>
-
-                {!!appUpdate.latestVersion && (
-                  <Text style={styles.forceMeta}>
-                    Latest version: v{appUpdate.latestVersion}
-                  </Text>
-                )}
-
-                <TouchableOpacity
-                  style={styles.forceBtn}
-                  onPress={openDownload}
-                  activeOpacity={0.9}
-                  accessibilityRole="button"
-                  accessibilityLabel="Download required update"
-                >
-                  <Text style={styles.forceBtnText}>Download update</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
-        </View>
+        <AppContent
+          appUpdate={appUpdate}
+          openDownload={openDownload}
+          popupDismissed={popupDismissed}
+          bannerDismissed={bannerDismissed}
+          setPopupDismissed={setPopupDismissed}
+          setBannerDismissed={setBannerDismissed}
+        />
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
 
+function AppContent({
+  appUpdate,
+  openDownload,
+  popupDismissed,
+  bannerDismissed,
+  setPopupDismissed,
+  setBannerDismissed,
+}: {
+  appUpdate: InternalUpdate | null | undefined;
+  openDownload: () => void;
+  popupDismissed: boolean;
+  bannerDismissed: boolean;
+  setPopupDismissed: React.Dispatch<React.SetStateAction<boolean>>;
+  setBannerDismissed: React.Dispatch<React.SetStateAction<boolean>>;
+}) {
+  useNotifications();
+
+  useEffect(() => {
+    const tryNavigatePendingCall = async () => {
+      const raw = await AsyncStorage.getItem(PENDING_CALL_KEY);
+      if (!raw) return;
+
+      const data = JSON.parse(raw);
+      const run = () => {
+        if (!navigationRef.isReady()) {
+          setTimeout(run, 400);
+          return;
+        }
+
+        navigationRef.navigate('IncomingCall', {
+          channel: data.channel ?? '',
+          token: data.token ?? '',
+          appId: data.app_id ?? '',
+          callerName: data.caller_name ?? 'Admin',
+          callerId: data.caller_id ?? '',
+        });
+
+        AsyncStorage.removeItem(PENDING_CALL_KEY).catch(() => {});
+      };
+
+      run();
+    };
+
+    tryNavigatePendingCall().catch(error => {
+      console.warn('[App] Failed to restore pending call:', error);
+    });
+  }, []);
+
+  const showUpdate = !!appUpdate?.needsUpdate && !appUpdate?.force;
+  const showPopup = showUpdate && !popupDismissed;
+  const showBanner = showUpdate && popupDismissed && !bannerDismissed;
+
+  return (
+    <View style={styles.root}>
+      <StatusBar barStyle="light-content" backgroundColor={MC.bg} />
+
+      {showBanner && appUpdate && (
+        <UpdateBanner
+          update={appUpdate}
+          onDownload={openDownload}
+          onDismiss={() => setBannerDismissed(true)}
+        />
+      )}
+
+      <OfflineBanner />
+      <Navigation />
+
+      {showUpdate && appUpdate && (
+        <UpdateSheet
+          visible={showPopup}
+          update={appUpdate}
+          onDownload={openDownload}
+          onDismiss={() => setPopupDismissed(true)}
+        />
+      )}
+
+      {appUpdate?.force && (
+        <View style={styles.forceOverlay}>
+          <View style={styles.forceCard}>
+            <Text style={styles.forceTitle}>Update required</Text>
+            <Text style={styles.forceSub}>
+              Please install the latest build to continue using the app.
+            </Text>
+
+            {!!appUpdate.latestVersion && (
+              <Text style={styles.forceMeta}>
+                Latest version: v{appUpdate.latestVersion}
+              </Text>
+            )}
+
+            <TouchableOpacity
+              style={styles.forceBtn}
+              onPress={openDownload}
+              activeOpacity={0.9}>
+              <Text style={styles.forceBtnText}>Download update</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1 },
-
-  // ── Bottom sheet ────────────────────────────────────────
   sheetBackdrop: {
     flex: 1,
     backgroundColor: '#000000b8',
@@ -381,7 +418,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexShrink: 0,
   },
-
   notesBox: {
     backgroundColor: `${MC.bg}66`,
     borderRadius: 10,
@@ -423,7 +459,6 @@ const styles = StyleSheet.create({
     fontFamily: MF.mono,
     lineHeight: 17,
   },
-
   downloadBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -446,8 +481,6 @@ const styles = StyleSheet.create({
     color: MC.textSub,
     fontFamily: MF.mono,
   },
-
-  // ── Slim banner ──────────────────────────────────────────
   banner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -494,8 +527,6 @@ const styles = StyleSheet.create({
     fontFamily: MF.mono,
   },
   bannerDismiss: { padding: 4 },
-
-  // ── Force overlay ────────────────────────────────────────
   forceOverlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',

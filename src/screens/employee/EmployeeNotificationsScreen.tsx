@@ -1,3 +1,4 @@
+// src/screens/employee/EmployeeNotificationsScreen.tsx
 import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
@@ -11,42 +12,22 @@ import {
   Alert,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import {
-  Bell,
-  Phone,
-  Inbox,
-  CheckCheck,
-  Trash2,
-} from 'lucide-react-native';
+import { Bell, Phone, Inbox, CheckCheck, Trash2 } from 'lucide-react-native';
 
 import { NotificationItem } from '../../components/employee/NotificationItem';
 import { CallLogItem } from '../../components/employee/CallLogItem';
-
-export type NotificationRecord = {
-  id: string;
-  type: 'notification';
-  title: string;
-  body: string;
-  sentBy: string;
-  sentAt: string;
-  read: boolean;
-};
-
-export type CallLogRecord = {
-  id: string;
-  type: 'call';
-  callerName: string;
-  callerPhone: string;
-  duration: number;
-  status: 'answered' | 'missed' | 'rejected';
-  timestamp: string;
-};
+import type { NotificationRecord, CallLogRecord } from '../../types/inbox';
+import {
+  getNotifications,
+  getCallLogs,
+  markAllNotificationsAsRead,
+  clearNotifications,
+  clearCallLogs,
+  clearInbox,
+  markNotificationAsRead,
+} from '../../utils/inboxHelpers';
 
 type TabType = 'all' | 'notifications' | 'calls';
-
-const NOTIF_STORAGE_KEY = 'employee_notifications';
-const CALL_LOG_STORAGE_KEY = 'employee_call_logs';
 
 export default function EmployeeNotificationsScreen() {
   const [activeTab, setActiveTab] = useState<TabType>('all');
@@ -57,25 +38,12 @@ export default function EmployeeNotificationsScreen() {
 
   const loadData = useCallback(async () => {
     try {
-      const [rawNotifs, rawCalls] = await Promise.all([
-        AsyncStorage.getItem(NOTIF_STORAGE_KEY),
-        AsyncStorage.getItem(CALL_LOG_STORAGE_KEY),
+      const [notifs, calls] = await Promise.all([
+        getNotifications(),
+        getCallLogs(),
       ]);
-
-      const parsedNotifs: NotificationRecord[] = rawNotifs ? JSON.parse(rawNotifs) : [];
-      const parsedCalls: CallLogRecord[] = rawCalls ? JSON.parse(rawCalls) : [];
-
-      setNotifications(
-        [...parsedNotifs].sort(
-          (a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime(),
-        ),
-      );
-
-      setCallLogs(
-        [...parsedCalls].sort(
-          (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-        ),
-      );
+      setNotifications(notifs);
+      setCallLogs(calls);
     } catch (e) {
       console.warn('[EmployeeNotifications] Failed to load data:', e);
     } finally {
@@ -98,9 +66,8 @@ export default function EmployeeNotificationsScreen() {
 
   const markAllRead = async () => {
     try {
-      const updated = notifications.map(n => ({ ...n, read: true }));
-      setNotifications(updated);
-      await AsyncStorage.setItem(NOTIF_STORAGE_KEY, JSON.stringify(updated));
+      await markAllNotificationsAsRead();
+      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
     } catch (e) {
       console.warn('[EmployeeNotifications] Failed to mark all read:', e);
     }
@@ -121,14 +88,16 @@ export default function EmployeeNotificationsScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              if (activeTab === 'notifications' || activeTab === 'all') {
+              if (activeTab === 'all') {
+                await clearInbox();
                 setNotifications([]);
-                await AsyncStorage.setItem(NOTIF_STORAGE_KEY, JSON.stringify([]));
-              }
-
-              if (activeTab === 'calls' || activeTab === 'all') {
                 setCallLogs([]);
-                await AsyncStorage.setItem(CALL_LOG_STORAGE_KEY, JSON.stringify([]));
+              } else if (activeTab === 'notifications') {
+                await clearNotifications();
+                setNotifications([]);
+              } else {
+                await clearCallLogs();
+                setCallLogs([]);
               }
             } catch (e) {
               console.warn('[EmployeeNotifications] Failed to clear data:', e);
@@ -145,9 +114,7 @@ export default function EmployeeNotificationsScreen() {
     if (activeTab === 'notifications') return notifications;
     if (activeTab === 'calls') return callLogs;
 
-    const merged: (NotificationRecord | CallLogRecord)[] = [...notifications, ...callLogs];
-
-    return merged.sort((a, b) => {
+    return [...notifications, ...callLogs].sort((a, b) => {
       const dateA = a.type === 'notification' ? a.sentAt : a.timestamp;
       const dateB = b.type === 'notification' ? b.sentAt : b.timestamp;
       return new Date(dateB).getTime() - new Date(dateA).getTime();
@@ -156,13 +123,12 @@ export default function EmployeeNotificationsScreen() {
 
   const handleRead = async (id: string) => {
     try {
-      const updated = notifications.map(n =>
-        n.id === id ? { ...n, read: true } : n,
+      setNotifications(prev =>
+        prev.map(n => (n.id === id ? { ...n, read: true } : n)),
       );
-      setNotifications(updated);
-      await AsyncStorage.setItem(NOTIF_STORAGE_KEY, JSON.stringify(updated));
+      await markNotificationAsRead(id);
     } catch (e) {
-      console.warn('[EmployeeNotifications] Failed to update notification:', e);
+      console.warn('[EmployeeNotifications] Failed to mark read:', e);
     }
   };
 
@@ -174,7 +140,6 @@ export default function EmployeeNotificationsScreen() {
     if (item.type === 'notification') {
       return <NotificationItem item={item} onRead={handleRead} />;
     }
-
     return <CallLogItem item={item} />;
   };
 
@@ -199,6 +164,17 @@ export default function EmployeeNotificationsScreen() {
       </Text>
     </View>
   );
+
+  const tabLabel = (tab: TabType): string => {
+    switch (tab) {
+      case 'all':
+        return `All (${notifications.length + callLogs.length})`;
+      case 'notifications':
+        return `Alerts (${notifications.length})`;
+      case 'calls':
+        return `Calls (${callLogs.length})`;
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -239,27 +215,28 @@ export default function EmployeeNotificationsScreen() {
             key={tab}
             style={[styles.tab, activeTab === tab && styles.tabActive]}
             onPress={() => setActiveTab(tab)}>
-            <Text
-              style={[
-                styles.tabLabel,
-                activeTab === tab && styles.tabLabelActive,
-              ]}>
-              {tab === 'all'
-                ? `All (${notifications.length + callLogs.length})`
-                : tab === 'notifications'
-                ? `Notifications (${unreadCount > 0 ? unreadCount : notifications.length})`
-                : `Calls (${callLogs.length})`}
-            </Text>
+            <View style={styles.tabInner}>
+              <Text
+                style={[
+                  styles.tabLabel,
+                  activeTab === tab && styles.tabLabelActive,
+                ]}>
+                {tabLabel(tab)}
+              </Text>
+              {tab === 'notifications' && unreadCount > 0 && (
+                <View style={styles.unreadBadge}>
+                  <Text style={styles.unreadBadgeText}>
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </Text>
+                </View>
+              )}
+            </View>
           </TouchableOpacity>
         ))}
       </View>
 
       {loading ? (
-        <ActivityIndicator
-          size="large"
-          color="#6366F1"
-          style={styles.loader}
-        />
+        <ActivityIndicator size="large" color="#6366F1" style={styles.loader} />
       ) : (
         <FlatList
           data={combinedList}
@@ -286,7 +263,6 @@ export default function EmployeeNotificationsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8F9FA' },
-
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -301,7 +277,6 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 22, fontWeight: '700', color: '#111827' },
   headerSubtitle: { fontSize: 13, color: '#6366F1', marginTop: 2 },
   headerActions: { flexDirection: 'row', gap: 8 },
-
   actionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -314,7 +289,6 @@ const styles = StyleSheet.create({
   actionBtnText: { fontSize: 12, fontWeight: '600', color: '#6366F1' },
   clearBtn: { backgroundColor: '#FEF2F2' },
   clearBtnText: { color: '#EF4444' },
-
   tabBar: {
     flexDirection: 'row',
     backgroundColor: '#ffffff',
@@ -330,13 +304,26 @@ const styles = StyleSheet.create({
     borderBottomColor: 'transparent',
   },
   tabActive: { borderBottomColor: '#6366F1' },
+  tabInner: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   tabLabel: { fontSize: 12, fontWeight: '500', color: '#6B7280' },
   tabLabelActive: { color: '#6366F1', fontWeight: '700' },
-
+  unreadBadge: {
+    backgroundColor: '#6366F1',
+    borderRadius: 999,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unreadBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '700',
+  },
   list: { padding: 12 },
   emptyList: { flexGrow: 1 },
   loader: { flex: 1, alignSelf: 'center' },
-
   emptyContainer: {
     flex: 1,
     alignItems: 'center',

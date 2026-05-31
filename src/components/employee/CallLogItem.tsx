@@ -1,3 +1,4 @@
+// src/components/employee/CallLogItem.tsx
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import {
@@ -6,7 +7,7 @@ import {
   PhoneOff,
   Clock3,
 } from 'lucide-react-native';
-import { CallLogRecord } from '../../screens/employee/EmployeeNotificationsScreen';
+import type { CallLogRecord } from '../../types/inbox';
 
 type Props = { item: CallLogRecord };
 
@@ -63,7 +64,7 @@ export function CallLogItem({ item }: Props) {
           <Text style={styles.time}>{timeAgo(item.timestamp)}</Text>
         </View>
 
-        <Text style={styles.phone}>{item.callerPhone}</Text>
+        <Text style={styles.phone}>{item.callerPhone || 'Unknown number'}</Text>
 
         <View style={styles.meta}>
           <View style={[styles.badge, { backgroundColor: `${config.color}18` }]}>
