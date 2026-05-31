@@ -8,6 +8,7 @@ import {
 
 const NOTIF_KEY = 'employee_notifications';
 const CALL_KEY = 'employee_call_logs';
+const MAX_ITEMS = 100;
 
 async function readList<T>(key: string): Promise<T[]> {
   try {
@@ -16,9 +17,23 @@ async function readList<T>(key: string): Promise<T[]> {
 
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as T[]) : [];
-  } catch {
+  } catch (error) {
+    console.warn(`[inboxHelpers] Failed to read key "${key}"`, error);
     return [];
   }
+}
+
+async function writeList<T>(key: string, items: T[]): Promise<void> {
+  try {
+    await AsyncStorage.setItem(key, JSON.stringify(items));
+  } catch (error) {
+    console.warn(`[inboxHelpers] Failed to write key "${key}"`, error);
+    throw error;
+  }
+}
+
+function trimList<T>(items: T[]): T[] {
+  return items.slice(0, MAX_ITEMS);
 }
 
 export async function saveNotification(
@@ -28,17 +43,35 @@ export async function saveNotification(
 ): Promise<NotificationRecord> {
   const existing = await readList<NotificationRecord>(NOTIF_KEY);
 
+  const normalizedTitle = title?.trim() || 'Notification';
+  const normalizedBody = body?.trim() || '';
+  const normalizedSentBy = sentBy?.trim() || 'Admin';
+
+  const duplicate = existing.find(
+    item =>
+      item.title === normalizedTitle &&
+      item.body === normalizedBody &&
+      item.sentBy === normalizedSentBy &&
+      Math.abs(
+        new Date(item.sentAt).getTime() - Date.now(),
+      ) < 5000,
+  );
+
+  if (duplicate) {
+    return duplicate;
+  }
+
   const record: NotificationRecord = {
     id: String(uuid.v4()),
     type: 'notification',
-    title,
-    body,
-    sentBy,
+    title: normalizedTitle,
+    body: normalizedBody,
+    sentBy: normalizedSentBy,
     sentAt: new Date().toISOString(),
     read: false,
   };
 
-  await AsyncStorage.setItem(NOTIF_KEY, JSON.stringify([record, ...existing]));
+  await writeList(NOTIF_KEY, trimList([record, ...existing]));
   return record;
 }
 
@@ -53,23 +86,66 @@ export async function saveCallLog(
   const record: CallLogRecord = {
     id: String(uuid.v4()),
     type: 'call',
-    callerName,
-    callerPhone,
+    callerName: callerName?.trim() || 'Unknown',
+    callerPhone: callerPhone?.trim() || '',
     status,
     duration,
     timestamp: new Date().toISOString(),
   };
 
-  await AsyncStorage.setItem(CALL_KEY, JSON.stringify([record, ...existing]));
+  await writeList(CALL_KEY, trimList([record, ...existing]));
   return record;
 }
 
+export async function upsertCallLog(
+  match: Partial<Pick<CallLogRecord, 'callerName' | 'callerPhone'>>,
+  updates: Partial<Omit<CallLogRecord, 'id' | 'type'>>,
+): Promise<CallLogRecord> {
+  const existing = await readList<CallLogRecord>(CALL_KEY);
+
+  const index = existing.findIndex(
+    item =>
+      (match.callerPhone && item.callerPhone === match.callerPhone) ||
+      (match.callerName && item.callerName === match.callerName),
+  );
+
+  if (index === -1) {
+    return saveCallLog(
+      updates.callerName ?? match.callerName ?? 'Unknown',
+      updates.callerPhone ?? match.callerPhone ?? '',
+      updates.status ?? 'missed',
+      updates.duration ?? 0,
+    );
+  }
+
+  const updatedRecord: CallLogRecord = {
+    ...existing[index],
+    ...updates,
+  };
+
+  const updatedList = [...existing];
+  updatedList[index] = updatedRecord;
+
+  updatedList.sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+  );
+
+  await writeList(CALL_KEY, trimList(updatedList));
+  return updatedRecord;
+}
+
 export async function getNotifications(): Promise<NotificationRecord[]> {
-  return readList<NotificationRecord>(NOTIF_KEY);
+  const items = await readList<NotificationRecord>(NOTIF_KEY);
+  return items.sort(
+    (a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime(),
+  );
 }
 
 export async function getCallLogs(): Promise<CallLogRecord[]> {
-  return readList<CallLogRecord>(CALL_KEY);
+  const items = await readList<CallLogRecord>(CALL_KEY);
+  return items.sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+  );
 }
 
 export async function markNotificationAsRead(id: string): Promise<void> {
@@ -77,13 +153,23 @@ export async function markNotificationAsRead(id: string): Promise<void> {
   const updated = notifications.map(item =>
     item.id === id ? { ...item, read: true } : item,
   );
-  await AsyncStorage.setItem(NOTIF_KEY, JSON.stringify(updated));
+  await writeList(NOTIF_KEY, updated);
+}
+
+export async function markAllNotificationsAsRead(): Promise<void> {
+  const notifications = await readList<NotificationRecord>(NOTIF_KEY);
+  const updated = notifications.map(item => ({ ...item, read: true }));
+  await writeList(NOTIF_KEY, updated);
 }
 
 export async function clearNotifications(): Promise<void> {
-  await AsyncStorage.removeItem(NOTIF_KEY);
+  await writeList(NOTIF_KEY, []);
 }
 
 export async function clearCallLogs(): Promise<void> {
-  await AsyncStorage.removeItem(CALL_KEY);
+  await writeList(CALL_KEY, []);
+}
+
+export async function clearInbox(): Promise<void> {
+  await Promise.all([writeList(NOTIF_KEY, []), writeList(CALL_KEY, [])]);
 }
