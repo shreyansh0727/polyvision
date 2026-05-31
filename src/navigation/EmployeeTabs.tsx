@@ -7,6 +7,7 @@ import {
   MapPin,
   Camera,
   User,
+  Bell,
   type LucideIcon,
 }                                     from 'lucide-react-native';
 import ReactNativeHapticFeedback      from 'react-native-haptic-feedback';
@@ -14,6 +15,7 @@ import ReactNativeHapticFeedback      from 'react-native-haptic-feedback';
 import TrackingScreen   from '../screens/employee/TrackingScreen';
 import VisitPhotoScreen from '../screens/employee/VisitPhotoScreen';
 import ProfileScreen    from '../screens/employee/ProfileScreen';
+import EmployeeNotificationsScreen from '../screens/employee/EmployeeNotificationsScreen';
 
 import TabIcon              from './TabIcon';
 import { sharedTabOptions } from './sharedTabOptions';
@@ -28,6 +30,7 @@ export type EmployeeTabParamList = {
   Tracking: undefined;
   LogVisit: undefined;
   Profile:  undefined;
+  Inbox:    undefined;
 };
 
 export type EmployeeStackParamList = {
@@ -85,6 +88,17 @@ function EmployeeTabNavigator() {
           headerShown: false,
         }}
       />
+      <Tab.Screen
+        name="Inbox"
+        component={EmployeeNotificationsScreen}
+        options={{
+          title:       'Inbox',
+          tabBarLabel: 'Inbox',
+          tabBarIcon:  makeIcon(Bell),
+          headerShown: false,
+        }}
+      />
+      
     </Tab.Navigator>
   );
 }

@@ -44,8 +44,9 @@
     "react-native-razorpay": "^3.0.0",
     "react-native-safe-area-context": "5.4.0",
     "react-native-screens": "4.4.0",
-    "react-native-zip-archive": "^8.0.1",
     "react-native-svg": "^15.10.1",
+    "react-native-uuid": "^2.0.4",
+    "react-native-zip-archive": "^8.0.1",
     "zustand": "5.0.12"
   },
   "devDependencies": {
