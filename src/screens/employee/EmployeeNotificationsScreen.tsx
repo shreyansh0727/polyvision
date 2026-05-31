@@ -10,7 +10,10 @@ import {
   StatusBar,
   ActivityIndicator,
   Alert,
+  Dimensions,
+  Platform,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Bell, Phone, Inbox, CheckCheck, Trash2 } from 'lucide-react-native';
 
@@ -26,16 +29,30 @@ import {
   clearInbox,
   markNotificationAsRead,
 } from '../../utils/inboxHelpers';
+import { MC } from '../../navigation/AppTheme';
+
+// ─── Responsive helpers ───────────────────────────────────────────────────────
+
+const { width: SCREEN_W } = Dimensions.get('window');
+const isTablet = SCREEN_W >= 768;
+const hp = (px: number) => px; // pixel values already device-independent
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type TabType = 'all' | 'notifications' | 'calls';
 
-export default function EmployeeNotificationsScreen() {
-  const [activeTab, setActiveTab] = useState<TabType>('all');
-  const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
-  const [callLogs, setCallLogs] = useState<CallLogRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+// ─── Screen ───────────────────────────────────────────────────────────────────
 
+export default function EmployeeNotificationsScreen() {
+  const insets = useSafeAreaInsets();
+
+  const [activeTab,      setActiveTab]      = useState<TabType>('all');
+  const [notifications,  setNotifications]  = useState<NotificationRecord[]>([]);
+  const [callLogs,       setCallLogs]       = useState<CallLogRecord[]>([]);
+  const [loading,        setLoading]        = useState(true);
+  const [refreshing,     setRefreshing]     = useState(false);
+
+  // ── Data loading ────────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
     try {
       const [notifs, calls] = await Promise.all([
@@ -59,69 +76,56 @@ export default function EmployeeNotificationsScreen() {
     }, [loadData]),
   );
 
-  const onRefresh = () => {
+  const onRefresh = useCallback(() => {
     setRefreshing(true);
     loadData();
-  };
+  }, [loadData]);
 
-  const markAllRead = async () => {
+  // ── Actions ─────────────────────────────────────────────────────────────────
+  const markAllRead = useCallback(async () => {
     try {
       await markAllNotificationsAsRead();
       setNotifications(prev => prev.map(n => ({ ...n, read: true })));
     } catch (e) {
       console.warn('[EmployeeNotifications] Failed to mark all read:', e);
     }
-  };
+  }, []);
 
-  const clearAll = () => {
-    Alert.alert(
-      'Clear inbox',
+  const handleClearAll = useCallback(() => {
+    const message =
       activeTab === 'all'
-        ? 'This will remove all notifications and call logs.'
+        ? 'Remove all notifications and call logs?'
         : activeTab === 'notifications'
-        ? 'This will remove all notifications.'
-        : 'This will remove all call logs.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Clear',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              if (activeTab === 'all') {
-                await clearInbox();
-                setNotifications([]);
-                setCallLogs([]);
-              } else if (activeTab === 'notifications') {
-                await clearNotifications();
-                setNotifications([]);
-              } else {
-                await clearCallLogs();
-                setCallLogs([]);
-              }
-            } catch (e) {
-              console.warn('[EmployeeNotifications] Failed to clear data:', e);
+        ? 'Remove all notifications?'
+        : 'Remove all call logs?';
+
+    Alert.alert('Clear inbox', message, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Clear',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            if (activeTab === 'all') {
+              await clearInbox();
+              setNotifications([]);
+              setCallLogs([]);
+            } else if (activeTab === 'notifications') {
+              await clearNotifications();
+              setNotifications([]);
+            } else {
+              await clearCallLogs();
+              setCallLogs([]);
             }
-          },
+          } catch (e) {
+            console.warn('[EmployeeNotifications] Failed to clear data:', e);
+          }
         },
-      ],
-    );
-  };
+      },
+    ]);
+  }, [activeTab]);
 
-  const unreadCount = notifications.filter(n => !n.read).length;
-
-  const combinedList = useMemo(() => {
-    if (activeTab === 'notifications') return notifications;
-    if (activeTab === 'calls') return callLogs;
-
-    return [...notifications, ...callLogs].sort((a, b) => {
-      const dateA = a.type === 'notification' ? a.sentAt : a.timestamp;
-      const dateB = b.type === 'notification' ? b.sentAt : b.timestamp;
-      return new Date(dateB).getTime() - new Date(dateA).getTime();
-    });
-  }, [activeTab, notifications, callLogs]);
-
-  const handleRead = async (id: string) => {
+  const handleRead = useCallback(async (id: string) => {
     try {
       setNotifications(prev =>
         prev.map(n => (n.id === id ? { ...n, read: true } : n)),
@@ -130,227 +134,420 @@ export default function EmployeeNotificationsScreen() {
     } catch (e) {
       console.warn('[EmployeeNotifications] Failed to mark read:', e);
     }
-  };
+  }, []);
 
-  const renderItem = ({
-    item,
-  }: {
-    item: NotificationRecord | CallLogRecord;
-  }) => {
-    if (item.type === 'notification') {
-      return <NotificationItem item={item} onRead={handleRead} />;
-    }
-    return <CallLogItem item={item} />;
-  };
-
-  const renderEmpty = () => (
-    <View style={styles.emptyContainer}>
-      <View style={styles.emptyIconWrap}>
-        {activeTab === 'calls' ? (
-          <Phone size={34} color="#6366F1" strokeWidth={2.2} />
-        ) : activeTab === 'notifications' ? (
-          <Bell size={34} color="#6366F1" strokeWidth={2.2} />
-        ) : (
-          <Inbox size={34} color="#6366F1" strokeWidth={2.2} />
-        )}
-      </View>
-      <Text style={styles.emptyTitle}>Nothing here yet</Text>
-      <Text style={styles.emptySubtitle}>
-        {activeTab === 'calls'
-          ? 'Call logs from admin will appear here.'
-          : activeTab === 'notifications'
-          ? 'Notifications from admin will appear here.'
-          : 'Notifications and call logs will appear here.'}
-      </Text>
-    </View>
+  // ── Derived data ─────────────────────────────────────────────────────────────
+  const unreadCount = useMemo(
+    () => notifications.filter(n => !n.read).length,
+    [notifications],
   );
 
-  const tabLabel = (tab: TabType): string => {
-    switch (tab) {
-      case 'all':
-        return `All (${notifications.length + callLogs.length})`;
-      case 'notifications':
-        return `Alerts (${notifications.length})`;
-      case 'calls':
-        return `Calls (${callLogs.length})`;
-    }
-  };
+  const combinedList = useMemo<(NotificationRecord | CallLogRecord)[]>(() => {
+    if (activeTab === 'notifications') return notifications;
+    if (activeTab === 'calls')         return callLogs;
+    return [...notifications, ...callLogs].sort((a, b) => {
+      const da = a.type === 'notification' ? a.sentAt    : a.timestamp;
+      const db = b.type === 'notification' ? b.sentAt    : b.timestamp;
+      return new Date(db).getTime() - new Date(da).getTime();
+    });
+  }, [activeTab, notifications, callLogs]);
+
+  const tabCount = useCallback(
+    (tab: TabType): number => {
+      if (tab === 'notifications') return notifications.length;
+      if (tab === 'calls')         return callLogs.length;
+      return notifications.length + callLogs.length;
+    },
+    [notifications.length, callLogs.length],
+  );
+
+  // ── Render helpers ───────────────────────────────────────────────────────────
+  const renderItem = useCallback(
+    ({ item }: { item: NotificationRecord | CallLogRecord }) =>
+      item.type === 'notification' ? (
+        <NotificationItem item={item} onRead={handleRead} />
+      ) : (
+        <CallLogItem item={item} />
+      ),
+    [handleRead],
+  );
+
+  const keyExtractor = useCallback(
+    (item: NotificationRecord | CallLogRecord) => item.id,
+    [],
+  );
+
+  const renderEmpty = useCallback(
+    () => (
+      <View style={styles.emptyContainer}>
+        <View style={styles.emptyIconRing}>
+          <View style={styles.emptyIconInner}>
+            {activeTab === 'calls' ? (
+              <Phone size={28} color={MC.green} strokeWidth={1.8} />
+            ) : activeTab === 'notifications' ? (
+              <Bell size={28} color={MC.green} strokeWidth={1.8} />
+            ) : (
+              <Inbox size={28} color={MC.green} strokeWidth={1.8} />
+            )}
+          </View>
+        </View>
+        <Text style={styles.emptyTitle}>All clear</Text>
+        <Text style={styles.emptySubtitle}>
+          {activeTab === 'calls'
+            ? 'Call logs from admin will appear here.'
+            : activeTab === 'notifications'
+            ? 'Notifications from admin will appear here.'
+            : 'Notifications and call logs will appear here.'}
+        </Text>
+      </View>
+    ),
+    [activeTab],
+  );
+
+  // ── Tab bar ───────────────────────────────────────────────────────────────────
+  const TAB_DEFS: { id: TabType; icon: React.ReactNode; label: string }[] = [
+    {
+      id: 'all',
+      icon: <Inbox size={14} color={activeTab === 'all' ? MC.green : MC.textSub} strokeWidth={2} />,
+      label: 'All',
+    },
+    {
+      id: 'notifications',
+      icon: <Bell size={14} color={activeTab === 'notifications' ? MC.green : MC.textSub} strokeWidth={2} />,
+      label: 'Alerts',
+    },
+    {
+      id: 'calls',
+      icon: <Phone size={14} color={activeTab === 'calls' ? MC.green : MC.textSub} strokeWidth={2} />,
+      label: 'Calls',
+    },
+  ];
+
+  const showMarkRead  = unreadCount > 0 && activeTab !== 'calls';
+  const showClearBtn  = combinedList.length > 0;
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+    <View style={[styles.root, { paddingTop: insets.top }]}>
+      <StatusBar barStyle="light-content" backgroundColor={MC.bg} />
 
+      {/* ── Header ─────────────────────────────────────────────────── */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>Inbox</Text>
+        <View style={styles.headerLeft}>
+          <Text style={styles.screenLabel}>INBOX</Text>
+          <Text style={styles.headerTitle}>Notifications</Text>
           {unreadCount > 0 && (
-            <Text style={styles.headerSubtitle}>
-              {unreadCount} unread notification{unreadCount > 1 ? 's' : ''}
-            </Text>
+            <View style={styles.unreadPill}>
+              <Text style={styles.unreadPillText}>
+                {unreadCount > 99 ? '99+' : unreadCount} unread
+              </Text>
+            </View>
           )}
         </View>
 
         <View style={styles.headerActions}>
-          {unreadCount > 0 && activeTab !== 'calls' && (
-            <TouchableOpacity style={styles.actionBtn} onPress={markAllRead}>
-              <CheckCheck size={14} color="#6366F1" />
-              <Text style={styles.actionBtnText}>Mark all read</Text>
+          {showMarkRead && (
+            <TouchableOpacity
+              style={styles.actionChip}
+              onPress={markAllRead}
+              accessibilityRole="button"
+              accessibilityLabel="Mark all notifications as read"
+            >
+              <CheckCheck size={13} color={MC.green} strokeWidth={2.2} />
+              <Text style={styles.actionChipText}>Mark read</Text>
             </TouchableOpacity>
           )}
-
-          {combinedList.length > 0 && (
+          {showClearBtn && (
             <TouchableOpacity
-              style={[styles.actionBtn, styles.clearBtn]}
-              onPress={clearAll}>
-              <Trash2 size={14} color="#EF4444" />
-              <Text style={[styles.actionBtnText, styles.clearBtnText]}>Clear</Text>
+              style={[styles.actionChip, styles.actionChipDestructive]}
+              onPress={handleClearAll}
+              accessibilityRole="button"
+              accessibilityLabel="Clear inbox"
+            >
+              <Trash2 size={13} color={MC.rose} strokeWidth={2.2} />
+              <Text style={[styles.actionChipText, { color: MC.rose }]}>Clear</Text>
             </TouchableOpacity>
           )}
         </View>
       </View>
 
-      <View style={styles.tabBar}>
-        {(['all', 'notifications', 'calls'] as TabType[]).map(tab => (
-          <TouchableOpacity
-            key={tab}
-            style={[styles.tab, activeTab === tab && styles.tabActive]}
-            onPress={() => setActiveTab(tab)}>
-            <View style={styles.tabInner}>
-              <Text
-                style={[
-                  styles.tabLabel,
-                  activeTab === tab && styles.tabLabelActive,
-                ]}>
-                {tabLabel(tab)}
+      {/* ── Tab bar ─────────────────────────────────────────────────── */}
+      <View style={styles.tabRow}>
+        {TAB_DEFS.map(tab => {
+          const isActive = activeTab === tab.id;
+          const count    = tabCount(tab.id);
+          return (
+            <TouchableOpacity
+              key={tab.id}
+              style={[styles.tabItem, isActive && styles.tabItemActive]}
+              onPress={() => setActiveTab(tab.id)}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: isActive }}
+              accessibilityLabel={`${tab.label} tab, ${count} items`}
+            >
+              {tab.icon}
+              <Text style={[styles.tabText, isActive && styles.tabTextActive]}>
+                {tab.label}
               </Text>
-              {tab === 'notifications' && unreadCount > 0 && (
-                <View style={styles.unreadBadge}>
-                  <Text style={styles.unreadBadgeText}>
-                    {unreadCount > 99 ? '99+' : unreadCount}
+              {count > 0 && (
+                <View style={[styles.tabCount, isActive && styles.tabCountActive]}>
+                  <Text style={[styles.tabCountText, isActive && styles.tabCountTextActive]}>
+                    {count > 99 ? '99+' : count}
                   </Text>
                 </View>
               )}
-            </View>
-          </TouchableOpacity>
-        ))}
+              {/* Unread indicator dot on Alerts tab */}
+              {tab.id === 'notifications' && unreadCount > 0 && (
+                <View style={styles.tabDot} />
+              )}
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
+      {/* ── Content ─────────────────────────────────────────────────── */}
       {loading ? (
-        <ActivityIndicator size="large" color="#6366F1" style={styles.loader} />
+        <View style={styles.loaderWrap}>
+          <ActivityIndicator size="large" color={MC.green} />
+          <Text style={styles.loaderText}>Loading…</Text>
+        </View>
       ) : (
         <FlatList
           data={combinedList}
-          keyExtractor={item => item.id}
+          keyExtractor={keyExtractor}
           renderItem={renderItem}
           ListEmptyComponent={renderEmpty}
-          contentContainerStyle={
-            combinedList.length === 0 ? styles.emptyList : styles.list
-          }
+          contentContainerStyle={[
+            styles.listContent,
+            { paddingBottom: insets.bottom + 24 },
+            combinedList.length === 0 && styles.listContentEmpty,
+          ]}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              colors={['#6366F1']}
-              tintColor="#6366F1"
+              colors={[MC.green]}
+              tintColor={MC.green}
+              progressBackgroundColor={MC.surfaceAlt}
             />
           }
           showsVerticalScrollIndicator={false}
+          removeClippedSubviews={Platform.OS === 'android'}
         />
       )}
     </View>
   );
 }
 
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const CARD_RADIUS    = 14;
+const HEADER_RADIUS  = 0;
+const CHIP_RADIUS    = 8;
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FA' },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 12,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  headerTitle: { fontSize: 22, fontWeight: '700', color: '#111827' },
-  headerSubtitle: { fontSize: 13, color: '#6366F1', marginTop: 2 },
-  headerActions: { flexDirection: 'row', gap: 8 },
-  actionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: '#EEF2FF',
-  },
-  actionBtnText: { fontSize: 12, fontWeight: '600', color: '#6366F1' },
-  clearBtn: { backgroundColor: '#FEF2F2' },
-  clearBtnText: { color: '#EF4444' },
-  tabBar: {
-    flexDirection: 'row',
-    backgroundColor: '#ffffff',
-    paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  tab: {
+  root: {
     flex: 1,
-    paddingVertical: 12,
-    alignItems: 'center',
+    backgroundColor: MC.bg,
+  },
+
+  // ── Header ──────────────────────────────────────────────────────
+  header: {
+    flexDirection:      'row',
+    justifyContent:     'space-between',
+    alignItems:         'flex-start',
+    paddingHorizontal:  isTablet ? 28 : 18,
+    paddingTop:         20,
+    paddingBottom:      16,
+    backgroundColor:    MC.surface,
+    borderBottomWidth:  1,
+    borderBottomColor:  MC.border,
+    borderRadius:       HEADER_RADIUS,
+  },
+  headerLeft: {
+    flex: 1,
+    gap:  4,
+  },
+  screenLabel: {
+    fontSize:      10,
+    fontWeight:    '700',
+    letterSpacing: 2.5,
+    color:         MC.green,
+  },
+  headerTitle: {
+    fontSize:   isTablet ? 26 : 22,
+    fontWeight: '700',
+    color:      MC.textPrimary,
+    lineHeight: isTablet ? 32 : 28,
+  },
+  unreadPill: {
+    alignSelf:        'flex-start',
+    marginTop:        4,
+    paddingHorizontal: 10,
+    paddingVertical:   3,
+    borderRadius:      999,
+    backgroundColor:  MC.greenDim,
+    borderWidth:      1,
+    borderColor:      `${MC.green}40`,
+  },
+  unreadPillText: {
+    fontSize:   11,
+    fontWeight: '700',
+    color:      MC.green,
+  },
+
+  headerActions: {
+    flexDirection: 'row',
+    alignItems:    'center',
+    gap:           8,
+    paddingTop:    2,
+  },
+  actionChip: {
+    flexDirection:    'row',
+    alignItems:       'center',
+    gap:              6,
+    paddingHorizontal: 12,
+    paddingVertical:   8,
+    borderRadius:     CHIP_RADIUS,
+    backgroundColor:  MC.greenDim,
+    borderWidth:      1,
+    borderColor:      `${MC.green}30`,
+  },
+  actionChipDestructive: {
+    backgroundColor: MC.roseDim,
+    borderColor:     `${MC.rose}30`,
+  },
+  actionChipText: {
+    fontSize:   12,
+    fontWeight: '600',
+    color:      MC.green,
+  },
+
+  // ── Tab bar ──────────────────────────────────────────────────────
+  tabRow: {
+    flexDirection:     'row',
+    backgroundColor:   MC.surface,
+    paddingHorizontal: isTablet ? 28 : 18,
+    paddingBottom:     0,
+    borderBottomWidth: 1,
+    borderBottomColor: MC.border,
+    gap:               4,
+  },
+  tabItem: {
+    flex:            1,
+    flexDirection:   'row',
+    alignItems:      'center',
+    justifyContent:  'center',
+    gap:             6,
+    paddingVertical: 13,
     borderBottomWidth: 2,
     borderBottomColor: 'transparent',
+    position:        'relative',
   },
-  tabActive: { borderBottomColor: '#6366F1' },
-  tabInner: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  tabLabel: { fontSize: 12, fontWeight: '500', color: '#6B7280' },
-  tabLabelActive: { color: '#6366F1', fontWeight: '700' },
-  unreadBadge: {
-    backgroundColor: '#6366F1',
-    borderRadius: 999,
-    minWidth: 18,
-    height: 18,
-    paddingHorizontal: 5,
-    alignItems: 'center',
-    justifyContent: 'center',
+  tabItemActive: {
+    borderBottomColor: MC.green,
   },
-  unreadBadgeText: {
-    color: '#ffffff',
-    fontSize: 10,
+  tabText: {
+    fontSize:   12,
+    fontWeight: '600',
+    color:      MC.textSub,
+  },
+  tabTextActive: {
+    color:      MC.green,
     fontWeight: '700',
   },
-  list: { padding: 12 },
-  emptyList: { flexGrow: 1 },
-  loader: { flex: 1, alignSelf: 'center' },
+  tabCount: {
+    backgroundColor:  MC.surfaceLift,
+    borderRadius:     999,
+    minWidth:         20,
+    height:           18,
+    paddingHorizontal: 5,
+    alignItems:       'center',
+    justifyContent:   'center',
+  },
+  tabCountActive: {
+    backgroundColor: MC.greenDim,
+  },
+  tabCountText: {
+    fontSize:   10,
+    fontWeight: '700',
+    color:      MC.textSub,
+  },
+  tabCountTextActive: {
+    color: MC.green,
+  },
+  tabDot: {
+    position:        'absolute',
+    top:             10,
+    right:           isTablet ? 18 : 8,
+    width:           7,
+    height:          7,
+    borderRadius:    4,
+    backgroundColor: MC.rose,
+    borderWidth:     1.5,
+    borderColor:     MC.surface,
+  },
+
+  // ── List ─────────────────────────────────────────────────────────
+  listContent: {
+    paddingHorizontal: isTablet ? 28 : 14,
+    paddingTop:        14,
+    gap:               1,
+  },
+  listContentEmpty: {
+    flexGrow: 1,
+  },
+
+  // ── Loading ──────────────────────────────────────────────────────
+  loaderWrap: {
+    flex:           1,
+    alignItems:     'center',
+    justifyContent: 'center',
+    gap:            12,
+  },
+  loaderText: {
+    fontSize:   13,
+    color:      MC.textSub,
+    fontWeight: '500',
+  },
+
+  // ── Empty ────────────────────────────────────────────────────────
   emptyContainer: {
-    flex: 1,
-    alignItems: 'center',
+    flex:           1,
+    alignItems:     'center',
     justifyContent: 'center',
     paddingVertical: 80,
-    paddingHorizontal: 24,
+    paddingHorizontal: 32,
+    gap:            12,
   },
-  emptyIconWrap: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#EEF2FF',
-    marginBottom: 16,
+  emptyIconRing: {
+    width:           80,
+    height:          80,
+    borderRadius:    40,
+    borderWidth:     1,
+    borderColor:     `${MC.green}30`,
+    backgroundColor: MC.greenDim,
+    alignItems:      'center',
+    justifyContent:  'center',
+    marginBottom:    8,
+  },
+  emptyIconInner: {
+    width:           52,
+    height:          52,
+    borderRadius:    26,
+    backgroundColor: `${MC.green}14`,
+    alignItems:      'center',
+    justifyContent:  'center',
   },
   emptyTitle: {
-    fontSize: 18,
+    fontSize:   17,
     fontWeight: '700',
-    color: '#374151',
-    marginBottom: 8,
+    color:      MC.textPrimary,
   },
   emptySubtitle: {
-    fontSize: 14,
-    color: '#9CA3AF',
-    textAlign: 'center',
-    paddingHorizontal: 32,
-    lineHeight: 20,
+    fontSize:      13,
+    color:         MC.textSub,
+    textAlign:     'center',
+    lineHeight:    20,
+    paddingHorizontal: 16,
   },
 });
